@@ -53,6 +53,24 @@ jobs:
           print(s)
           PY
 
+      - name: Fonts (Amiri)
+        run: |
+          mkdir -p assets/fonts
+          B=https://raw.githubusercontent.com/google/fonts/main/ofl/amiri
+          if curl -fsSL -o assets/fonts/Amiri-Regular.ttf $B/Amiri-Regular.ttf && curl -fsSL -o assets/fonts/Amiri-Bold.ttf $B/Amiri-Bold.ttf; then
+            cat >> pubspec.yaml <<'YAML'
+            fonts:
+              - family: Amiri
+                fonts:
+                  - asset: assets/fonts/Amiri-Regular.ttf
+                  - asset: assets/fonts/Amiri-Bold.ttf
+                    weight: 700
+          YAML
+            echo "fonts added"
+          else
+            echo "font download failed, continuing without"
+          fi
+
       - run: flutter pub get
 
       - name: Disable Android lint checks
@@ -118,6 +136,24 @@ jobs:
           m = re.sub(r'"short_name":\s*"[^"]*"', '"short_name": "سند"', m, count=1)
           open('web/manifest.json', 'w', encoding='utf-8').write(m)
           PY
+
+      - name: Fonts (Amiri)
+        run: |
+          mkdir -p assets/fonts
+          B=https://raw.githubusercontent.com/google/fonts/main/ofl/amiri
+          if curl -fsSL -o assets/fonts/Amiri-Regular.ttf $B/Amiri-Regular.ttf && curl -fsSL -o assets/fonts/Amiri-Bold.ttf $B/Amiri-Bold.ttf; then
+            cat >> pubspec.yaml <<'YAML'
+            fonts:
+              - family: Amiri
+                fonts:
+                  - asset: assets/fonts/Amiri-Regular.ttf
+                  - asset: assets/fonts/Amiri-Bold.ttf
+                    weight: 700
+          YAML
+            echo "fonts added"
+          else
+            echo "font download failed, continuing without"
+          fi
 
       - run: flutter pub get
 
