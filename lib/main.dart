@@ -11,10 +11,12 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:http/http.dart' as http;
+import 'package:qr_flutter/qr_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -23,7 +25,55 @@ import 'package:url_launcher/url_launcher.dart';
 // ---------------------------------------------------------------------
 
 const String kAppName = 'سَنَد';
-const String kVersion = '1.0.0';
+const String kVersion = '1.1.0';
+const int kBuild = int.fromEnvironment('BUILD', defaultValue: 0);
+const String kSiteUrl = 'https://www774475437-svg.github.io/sanad/';
+const String kApkUrl =
+    'https://github.com/www774475437-svg/sanad/releases/latest/download/sanad.apk';
+const String kReleasesApi =
+    'https://api.github.com/repos/www774475437-svg/sanad/releases/latest';
+
+/// مسائل مقترحة (عبارات بحث فقط، والجواب من كلام الشيخ نفسه).
+const List<String> kTopics = [
+  'ما حكم النمص؟',
+  'حكم تارك الصلاة',
+  'زكاة الحلي',
+  'دم الحيض',
+  'حكم حلق اللحية',
+  'حكم الإسبال',
+  'حكم الغناء والمعازف',
+  'حكم التصوير',
+  'نواقض الإسلام',
+  'حكم السحر والسحرة',
+  'حكم الذبح لغير الله',
+  'حكم التوسل',
+  'شروط لا إله إلا الله',
+  'حكم الصلاة في المقبرة',
+  'حكم الاحتفال بالمولد',
+  'حكم صلاة الجماعة',
+  'حكم الصلاة بعد العصر',
+  'الدماء الطبيعية للنساء',
+  'حكم زكاة المال',
+  'حكم الربا',
+  'حكم التدخين',
+  'حكم الحلف بغير الله',
+  'أنواع التوحيد',
+  'حكم القنوت في الفجر',
+  'حكم قراءة القرآن للحائض',
+  'حكم الجمع بين الصلاتين',
+];
+
+/// موضوعات عامة للاختيار السريع.
+const List<String> kTopicChips = [
+  'الصلاة',
+  'الزكاة',
+  'الصيام',
+  'الحج',
+  'الطهارة',
+  'النكاح',
+  'التوحيد',
+  'الدماء',
+];
 const String kDeveloper = 'أبو عبد الرحمن الأثري';
 const String kTelegram = 'https://t.me/alhsaar4';
 const String kScholarIntro = 'قال الشيخ ابن عثيمين رَحِمَهُ الله:';
@@ -276,6 +326,56 @@ Future<void> openLink(BuildContext context, String url) async {
   if (!ok && context.mounted) showToast(context, 'تعذّر فتح الرابط');
 }
 
+String quoteLink(Quote q) => Uri.https('www774475437-svg.github.io', '/sanad/', {
+      'b': '${q.bookId}',
+      'p': '${q.pageId}',
+      'n': q.bookName,
+      'l': q.pageLabel,
+    }).toString();
+
+Future<void> checkForUpdate(BuildContext context, {bool manual = false}) async {
+  try {
+    final r = await http
+        .get(Uri.parse(kReleasesApi),
+            headers: {'Accept': 'application/vnd.github+json'})
+        .timeout(const Duration(seconds: 15));
+    if (!context.mounted) return;
+    if (r.statusCode != 200) {
+      if (manual) showToast(context, 'تعذّر فحص التحديث');
+      return;
+    }
+    final d = jsonDecode(r.body);
+    final tag = asStr(d['tag_name']);
+    final n = int.tryParse(tag.split('.').last) ?? 0;
+    if (n > kBuild) {
+      if (!manual && n == app.promptedUpdate) return;
+      app.setPrompted(n);
+      final url = asStr(d['html_url']);
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('يوجد تحديث جديد'),
+          content: const Text('صدرت نسخة أحدث من سَنَد. اضغط «تحميل» ثم ثبّتها فوق النسخة الحالية.'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('لاحقًا')),
+            FilledButton(
+              onPressed: () {
+                Navigator.pop(ctx);
+                openLink(context, url);
+              },
+              child: const Text('تحميل'),
+            ),
+          ],
+        ),
+      );
+    } else if (manual) {
+      showToast(context, 'أنت على أحدث نسخة');
+    }
+  } catch (_) {
+    if (manual && context.mounted) showToast(context, 'تعذّر فحص التحديث');
+  }
+}
+
 String telegramFormat(Quote q) =>
     '📜 ${q.issue.isEmpty ? 'من كلام الشيخ ابن عثيمين' : q.issue}\n\n'
     '▪️ $kScholarIntro\n'
@@ -300,6 +400,8 @@ class AppState extends ChangeNotifier {
   List<Conversation> conversations = <Conversation>[];
   List<Quote> favorites = <Quote>[];
   Map<String, dynamic>? lastRead;
+  List<String> recents = <String>[];
+  int promptedUpdate = 0;
 
   Future<void> load() async {
     _p = await SharedPreferences.getInstance();
@@ -309,6 +411,8 @@ class AppState extends ChangeNotifier {
         ? ThemeMode.dark
         : (t == 'system' ? ThemeMode.system : ThemeMode.light);
     fontScale = p.getDouble('fontScale') ?? 1.0;
+    recents = p.getStringList('recents') ?? <String>[];
+    promptedUpdate = p.getInt('promptedUpdate') ?? 0;
     conversations = _decode(p.getString('conversations'))
         .map((m) => Conversation.fromJson(m))
         .toList();
@@ -352,6 +456,52 @@ class AppState extends ChangeNotifier {
     fontScale = v;
     _p?.setDouble('fontScale', v);
     notifyListeners();
+  }
+
+  void addRecent(String q) {
+    final t = q.trim();
+    if (t.isEmpty) return;
+    recents.remove(t);
+    recents.insert(0, t);
+    if (recents.length > 8) recents = recents.sublist(0, 8);
+    _p?.setStringList('recents', recents);
+    notifyListeners();
+  }
+
+  void clearRecents() {
+    recents = <String>[];
+    _p?.remove('recents');
+    notifyListeners();
+  }
+
+  void setPrompted(int n) {
+    promptedUpdate = n;
+    _p?.setInt('promptedUpdate', n);
+  }
+
+  String exportFavorites() => jsonEncode(
+      {'sanad': 1, 'favorites': favorites.map((f) => f.toJson()).toList()});
+
+  /// يرجع عدد ما أُضيف، أو -1 عند فشل القراءة.
+  int importFavorites(String text) {
+    try {
+      final d = jsonDecode(text);
+      final list = d is Map ? asMapList(d['favorites']) : asMapList(d);
+      var n = 0;
+      for (final m in list) {
+        final q = Quote.fromJson(m);
+        if (q.text.isNotEmpty && !isFavorite(q)) {
+          favorites.add(q);
+          n++;
+        }
+      }
+      _p?.setString(
+          'favorites', jsonEncode(favorites.map((f) => f.toJson()).toList()));
+      notifyListeners();
+      return n;
+    } catch (_) {
+      return -1;
+    }
   }
 
   bool isFavorite(Quote q) => favorites.any((f) => f.key == q.key);
@@ -730,6 +880,35 @@ class _HomeScreenState extends State<HomeScreen> {
   int _animateFrom = -1; // رقم أحدث رسالة تظهر بالتدريج
 
   @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _startup());
+  }
+
+  Future<void> _startup() async {
+    if (!mounted) return;
+    final q = Uri.base.queryParameters;
+    final b = int.tryParse(q['b'] ?? '');
+    if (b != null) {
+      Navigator.of(context).push(MaterialPageRoute<void>(
+        builder: (_) => ReaderScreen(
+          quote: Quote(
+            bookId: b,
+            bookName: q['n'] ?? bookTitleOf(b),
+            vol: '',
+            page: q['l'] ?? '',
+            pageId: int.tryParse(q['p'] ?? '') ?? 0,
+            text: '',
+          ),
+        ),
+      ));
+    } else if ((q['q'] ?? '').trim().isNotEmpty) {
+      _send(q['q']);
+    }
+    if (!kIsWeb) checkForUpdate(context);
+  }
+
+  @override
   void dispose() {
     _input.dispose();
     _drawerSearch.dispose();
@@ -755,6 +934,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _send([String? preset]) async {
     final raw = (preset ?? _input.text).trim();
     if (raw.isEmpty || _loading) return;
+    app.addRecent(raw);
     _input.clear();
     FocusScope.of(context).unfocus();
     final now = DateTime.now().millisecondsSinceEpoch;
@@ -1212,7 +1392,8 @@ class _EmptyState extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final lr = app.lastRead;
-    const samples = ['ما حكم النمص؟', 'حكم تارك الصلاة', 'زكاة الحلي', 'دم الحيض'];
+    final today = kTopics[DateTime.now().difference(DateTime(2024)).inDays % kTopics.length];
+    final recents = app.recents.take(6).toList();
     return ListView(
       padding: const EdgeInsets.all(24),
       children: [
@@ -1247,14 +1428,82 @@ class _EmptyState extends StatelessWidget {
                 .bodySmall
                 ?.copyWith(color: scheme.onSurfaceVariant)),
         const SizedBox(height: 22),
+        InkWell(
+          borderRadius: BorderRadius.circular(16),
+          onTap: () => onAsk(today),
+          child: Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: scheme.primaryContainer.withOpacity(0.55),
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Row(children: [
+              Icon(Icons.wb_sunny_outlined, color: scheme.primary),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('مسألة اليوم',
+                        style: TextStyle(
+                            color: scheme.primary, fontWeight: FontWeight.bold, fontSize: 12)),
+                    const SizedBox(height: 2),
+                    Text(today, style: const TextStyle(fontSize: 16)),
+                  ],
+                ),
+              ),
+              const Icon(Icons.chevron_left),
+            ]),
+          ),
+        ),
+        const SizedBox(height: 18),
+        Text('اختر موضوعًا',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12)),
+        const SizedBox(height: 8),
         Wrap(
           alignment: WrapAlignment.center,
           spacing: 8,
           runSpacing: 8,
-          children: samples
-              .map((s) => ActionChip(label: Text(s), onPressed: () => onAsk(s)))
-              .toList(),
+          children: [
+            ...kTopicChips
+                .map((s) => ActionChip(label: Text(s), onPressed: () => onAsk(s))),
+            ActionChip(
+              avatar: const Icon(Icons.casino_outlined, size: 18),
+              label: const Text('مسألة عشوائية'),
+              onPressed: () => onAsk(kTopics[math.Random().nextInt(kTopics.length)]),
+            ),
+          ],
         ),
+        if (recents.isNotEmpty) ...[
+          const SizedBox(height: 20),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text('آخر ما بحثتَ عنه',
+                  style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12)),
+              const SizedBox(width: 6),
+              InkWell(
+                onTap: app.clearRecents,
+                child: Text('مسح',
+                    style: TextStyle(color: scheme.primary, fontSize: 12)),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            alignment: WrapAlignment.center,
+            spacing: 8,
+            runSpacing: 8,
+            children: recents
+                .map((s) => ActionChip(
+                      avatar: const Icon(Icons.history, size: 16),
+                      label: Text(s),
+                      onPressed: () => onAsk(s),
+                    ))
+                .toList(),
+          ),
+        ],
         if (lr != null) ...[
           const SizedBox(height: 22),
           Center(
@@ -1400,15 +1649,34 @@ class QuoteCard extends StatelessWidget {
             title: const Text('نسخ عادي مع المصدر'),
             onTap: () => Navigator.pop(ctx, 'plain'),
           ),
+          ListTile(
+            leading: const Icon(Icons.format_clear),
+            title: const Text('نسخ بدون تشكيل'),
+            onTap: () => Navigator.pop(ctx, 'nt'),
+          ),
         ]),
       ),
     );
     if (choice == null) return;
     final text = choice == 'tg'
         ? telegramFormat(quote)
-        : (choice == 'wa' ? whatsappFormat(quote) : plainFormat(quote));
+        : (choice == 'wa'
+            ? whatsappFormat(quote)
+            : (choice == 'nt' ? stripTashkeel(plainFormat(quote)) : plainFormat(quote)));
     await Clipboard.setData(ClipboardData(text: text));
     if (context.mounted) showToast(context, 'تم النسخ');
+  }
+
+  Future<void> _report(BuildContext context) async {
+    final t = 'بلاغ عن خطأ في سَنَد\n'
+        'الكتاب: ${quote.bookName}\n'
+        'الصفحة: ${quote.pageLabel}\n'
+        'الرابط: ${quote.turathUrl}\n'
+        'وصف الخطأ: ';
+    await Clipboard.setData(ClipboardData(text: t));
+    if (!context.mounted) return;
+    showToast(context, 'نُسخ نص البلاغ، الصقه في محادثة المطور');
+    openLink(context, kTelegram);
   }
 
   @override
@@ -1512,6 +1780,19 @@ class QuoteCard extends StatelessWidget {
                 tooltip: 'فتح في تراث',
                 icon: const Icon(Icons.open_in_new, size: 20),
                 onPressed: () => openLink(context, quote.turathUrl),
+              ),
+              IconButton(
+                tooltip: 'نسخ رابط للمشاركة',
+                icon: const Icon(Icons.link, size: 20),
+                onPressed: () async {
+                  await Clipboard.setData(ClipboardData(text: quoteLink(quote)));
+                  if (context.mounted) showToast(context, 'تم نسخ الرابط');
+                },
+              ),
+              IconButton(
+                tooltip: 'إبلاغ عن خطأ',
+                icon: const Icon(Icons.flag_outlined, size: 20),
+                onPressed: () => _report(context),
               ),
             ],
           ),
@@ -2005,6 +2286,87 @@ class _SettingsScreenState extends State<SettingsScreen> {
               title: const Text('فحص الاتصال بتراث'),
               subtitle: const Text('إن ظهرت مشكلة، انسخ النتيجة وأرسلها للمطور'),
               onTap: _testing ? null : _diagnose,
+            ),
+            ListTile(
+              leading: const Icon(Icons.system_update_alt),
+              title: const Text('فحص التحديث'),
+              subtitle: Text('الإصدار $kVersion'),
+              onTap: () => checkForUpdate(context, manual: true),
+            ),
+            ListTile(
+              leading: const Icon(Icons.upload_file_outlined),
+              title: const Text('نسخ احتياطي للمفضلة'),
+              subtitle: const Text('ينسخ المفضلة إلى الحافظة لتحفظها في ملاحظة'),
+              onTap: () async {
+                await Clipboard.setData(ClipboardData(text: app.exportFavorites()));
+                if (context.mounted) showToast(context, 'تم نسخ المفضلة');
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.download_for_offline_outlined),
+              title: const Text('استرجاع المفضلة'),
+              subtitle: const Text('الصق النسخة المنسوخة ثم اضغط هنا'),
+              onTap: () async {
+                final d = await Clipboard.getData('text/plain');
+                final n = app.importFavorites(d?.text ?? '');
+                if (context.mounted) {
+                  showToast(context, n < 0 ? 'لم أجد نسخة صالحة في الحافظة' : 'أُضيف $n نقل');
+                }
+              },
+            ),
+            const _SectionTitle('الموقع والتطبيق'),
+            if (kIsWeb)
+              ListTile(
+                leading: const Icon(Icons.add_to_home_screen),
+                title: const Text('تثبيت على الشاشة الرئيسية'),
+                subtitle: const Text('اختياري، ليعمل كأنه تطبيق'),
+                onTap: () => showDialog<void>(
+                  context: context,
+                  builder: (ctx) => AlertDialog(
+                    title: const Text('تثبيت سَنَد'),
+                    content: const Text(
+                      'آيفون (سفاري): اضغط زر المشاركة ثم «إضافة إلى الشاشة الرئيسية».\n\n'
+                      'أندرويد (كروم): اضغط القائمة ⋮ ثم «تثبيت التطبيق» أو «إضافة إلى الشاشة الرئيسية».',
+                      style: TextStyle(height: 1.8),
+                    ),
+                    actions: [
+                      FilledButton(
+                          onPressed: () => Navigator.pop(ctx), child: const Text('حسنًا')),
+                    ],
+                  ),
+                ),
+              ),
+            if (kIsWeb)
+              ListTile(
+                leading: const Icon(Icons.android),
+                title: const Text('حمّل تطبيق الأندرويد'),
+                onTap: () => openLink(context, kApkUrl),
+              ),
+            ListTile(
+              leading: const Icon(Icons.qr_code_2),
+              title: const Text('رمز QR للموقع'),
+              onTap: () => showDialog<void>(
+                context: context,
+                builder: (ctx) => AlertDialog(
+                  title: const Text('رمز QR'),
+                  content: SizedBox(
+                    width: 240,
+                    height: 240,
+                    child: QrImageView(data: kSiteUrl, backgroundColor: Colors.white),
+                  ),
+                  actions: [
+                    TextButton(
+                      onPressed: () {
+                        Clipboard.setData(const ClipboardData(text: kSiteUrl));
+                        Navigator.pop(ctx);
+                      },
+                      child: const Text('نسخ الرابط'),
+                    ),
+                    FilledButton(
+                        onPressed: () => Navigator.pop(ctx), child: const Text('إغلاق')),
+                  ],
+                ),
+              ),
             ),
             const _SectionTitle('عن التطبيق'),
             ListTile(
