@@ -689,6 +689,7 @@ class TurathApi {
   }
 
   Future<PageData> page(int bookId, int pg) async {
+    if (kIsWeb) return localIndex.page(bookId, pg);
     final body = await _get('/page', {
       'book_id': '$bookId',
       'pg': '$pg',
@@ -708,6 +709,10 @@ class TurathApi {
 
   /// فحص الاتصال: يرجع وصفًا مختصرًا لنتيجة بحث تجريبي.
   Future<String> diagnose() async {
+    if (kIsWeb) {
+      final lb = await localIndex.page(11224, 5);
+      return 'نجح قراءة ملفات الكتب مباشرة من تراث.\nمقتطف: ${lb.text.length > 120 ? lb.text.substring(0, 120) : lb.text}';
+    }
     final body =
         await _get('/search', {'q': 'الصلاة', 'ver': '3', 'book': '12293'});
     final items = _items(body);
@@ -725,6 +730,227 @@ class TurathApi {
 }
 
 final TurathApi api = TurathApi();
+
+// ---------------------------------------------------------------------
+//  البحث المحلي في ملفات الكتب (يعمل في المتصفح بلا حدّ للطلبات)
+// ---------------------------------------------------------------------
+
+int _nc(int c) {
+  if ((c >= 0x064B && c <= 0x065F) || c == 0x0670 || c == 0x0640) return -1;
+  if (c == 0x0623 || c == 0x0625 || c == 0x0622 || c == 0x0671) return 0x0627;
+  if (c == 0x0649) return 0x064A;
+  if (c == 0x0629) return 0x0647;
+  if (c == 10 || c == 13 || c == 9 || c == 0xA0) return 32;
+  return c;
+}
+
+/// يوحّد النص للمقارنة: بلا تشكيل ولا تطويل، وتُوحَّد الألف والياء والتاء المربوطة.
+/// إن مُرِّرت [map] فتُملأ بموضع كل حرف في النص الأصلي.
+String _normRaw(String raw, {List<int>? map, bool tags = true}) {
+  final sb = StringBuffer();
+  var inTag = false;
+  for (var i = 0; i < raw.length; i++) {
+    final c = raw.codeUnitAt(i);
+    if (tags) {
+      if (c == 60) {
+        inTag = true;
+        continue;
+      }
+      if (inTag) {
+        if (c == 62) inTag = false;
+        continue;
+      }
+    }
+    final m = _nc(c);
+    if (m < 0) continue;
+    sb.writeCharCode(m);
+    map?.add(i);
+  }
+  return sb.toString();
+}
+
+String normArabic(String s) => _normRaw(s, tags: false);
+
+class LocalPage {
+  final String vol;
+  final String page;
+  final String raw;
+  final String norm;
+  const LocalPage(this.vol, this.page, this.raw, this.norm);
+}
+
+class LocalBook {
+  final Book book;
+  final List<LocalPage> pages;
+  const LocalBook(this.book, this.pages);
+}
+
+class LocalIndex {
+  final Map<int, Future<LocalBook>> _books = {};
+  final ValueNotifier<String> status = ValueNotifier<String>('');
+  int _done = 0;
+
+  Future<LocalBook> _load(Book b) =>
+      _books.putIfAbsent(b.id, () => _fetch(b));
+
+  Future<LocalBook> _fetch(Book b) async {
+    if (status.value.isEmpty) {
+      status.value = 'جارٍ تجهيز كتب الشيخ (أول مرة فقط)... $_done/${kBooks.length}';
+    }
+    try {
+      final r = await http
+          .get(Uri.https('files.turath.io', '/books-v3/${b.id}.json'))
+          .timeout(const Duration(seconds: 180));
+      if (r.statusCode != 200) throw ApiException('HTTP ${r.statusCode}');
+      final d = jsonDecode(utf8.decode(r.bodyBytes));
+      final list = d is Map ? d['pages'] : null;
+      if (list is! List) throw ApiException('bad book file');
+      final pages = <LocalPage>[];
+      for (var i = 0; i < list.length; i++) {
+        final p = list[i];
+        final raw = p is Map ? asStr(p['text']) : '';
+        var pg = p is Map ? asStr(p['page']) : '';
+        if (pg == 'None' || pg == 'null') pg = '';
+        pages.add(LocalPage(
+            p is Map ? asStr(p['vol']) : '', pg, raw, _normRaw(raw)));
+        if (i % 600 == 599) await Future<void>.delayed(Duration.zero);
+      }
+      _done++;
+      status.value = _done >= kBooks.length
+          ? ''
+          : 'جارٍ تجهيز كتب الشيخ (أول مرة فقط)... $_done/${kBooks.length}';
+      return LocalBook(b, pages);
+    } on ApiException {
+      _books.remove(b.id);
+      status.value = '';
+      rethrow;
+    } catch (e) {
+      _books.remove(b.id);
+      status.value = '';
+      throw ApiException('local: $e');
+    }
+  }
+
+  Future<void> preload() async {
+    try {
+      await Future.wait(kBooks.map(_load));
+    } catch (_) {}
+  }
+
+  Future<List<Quote>> searchAll(List<String> terms, {int perBook = 3}) async {
+    final nt = terms.map(normArabic).where((t) => t.isNotEmpty).toList();
+    if (nt.isEmpty) return <Quote>[];
+    final books = await Future.wait(kBooks.map(_load));
+    final out = <Quote>[];
+    for (final lb in books) {
+      out.addAll(_searchBook(lb, nt, perBook));
+    }
+    return out;
+  }
+
+  List<Quote> _searchBook(LocalBook lb, List<String> nt, int limit) {
+    final scored = <MapEntry<int, double>>[];
+    for (var i = 0; i < lb.pages.length; i++) {
+      final n = lb.pages[i].norm;
+      var ok = true;
+      var occ = 0;
+      var minP = 1 << 30;
+      var maxP = -1;
+      for (final t in nt) {
+        final p = n.indexOf(t);
+        if (p < 0) {
+          ok = false;
+          break;
+        }
+        minP = math.min(minP, p);
+        maxP = math.max(maxP, p);
+        var c = 1;
+        var q = n.indexOf(t, p + t.length);
+        while (q >= 0 && c < 6) {
+          c++;
+          q = n.indexOf(t, q + t.length);
+        }
+        occ += c;
+      }
+      if (!ok) continue;
+      final spread = nt.length > 1 ? (maxP - minP) : 0;
+      scored.add(MapEntry(i, occ + 12 / (1 + spread / 150.0)));
+    }
+    scored.sort((a, b) => b.value.compareTo(a.value));
+    final out = <Quote>[];
+    for (final e in scored.take(limit)) {
+      final q = _extract(lb, e.key, nt);
+      if (q != null) out.add(q);
+    }
+    return out;
+  }
+
+  Quote? _extract(LocalBook lb, int i, List<String> nt) {
+    final pg = lb.pages[i];
+    final raw = pg.raw;
+    final map = <int>[];
+    final n = _normRaw(raw, map: map);
+    var p = -1;
+    for (final t in nt) {
+      final q = n.indexOf(t);
+      if (q >= 0 && (p < 0 || q < p)) p = q;
+    }
+    final rawPos = p >= 0 && p < map.length ? map[p] : 0;
+    const tag = '<span data-type="title"';
+    var s = raw.lastIndexOf(tag, rawPos);
+    if (s < 0) s = 0;
+    var e = raw.indexOf(tag, rawPos);
+    if (e < 0) e = raw.length;
+    final text = _excerpt(cleanHtml(raw.substring(s, e)), nt);
+    if (text.isEmpty) return null;
+    return Quote(
+      bookId: lb.book.id,
+      bookName: lb.book.title,
+      vol: pg.vol,
+      page: pg.page,
+      pageId: i + 1,
+      text: text,
+    );
+  }
+
+  String _excerpt(String cleaned, List<String> nt, {int size = 1300}) {
+    if (cleaned.length <= size) return cleaned;
+    final map = <int>[];
+    final n = _normRaw(cleaned, map: map, tags: false);
+    var p = -1;
+    for (final t in nt) {
+      final q = n.indexOf(t);
+      if (q >= 0 && (p < 0 || q < p)) p = q;
+    }
+    final c = p >= 0 && p < map.length ? map[p] : 0;
+    var start = math.max(0, c - 250);
+    var end = math.min(cleaned.length, start + size);
+    if (start > 0) {
+      final sp = cleaned.indexOf(' ', start);
+      if (sp >= 0 && sp < start + 40) start = sp + 1;
+    }
+    if (end < cleaned.length) {
+      final sp = cleaned.lastIndexOf(' ', end);
+      if (sp > start + size ~/ 2) end = sp;
+    }
+    return '${start > 0 ? '…' : ''}${cleaned.substring(start, end).trim()}'
+        '${end < cleaned.length ? '…' : ''}';
+  }
+
+  Future<PageData> page(int bookId, int pg) async {
+    final b = kBooks.firstWhere((x) => x.id == bookId,
+        orElse: () => throw ApiException('unknown book'));
+    final lb = await _load(b);
+    if (pg < 1 || pg > lb.pages.length) return PageData('', '');
+    final p = lb.pages[pg - 1];
+    final label = p.page.isEmpty
+        ? ''
+        : ((p.vol.isEmpty || p.vol == '0') ? p.page : '${p.vol}/${p.page}');
+    return PageData(cleanHtml(p.raw), label);
+  }
+}
+
+final LocalIndex localIndex = LocalIndex();
 
 // ---------------------------------------------------------------------
 //  فهم السؤال (بلا ذكاء اصطناعي) وتكوين الجواب
@@ -772,7 +998,16 @@ class AnswerEngine {
   Future<List<Quote>> _search(String query, List<String> terms) async {
     final cached = app.cached(query);
     if (cached != null) return cached;
-    final found = await api.searchAll(query, terms);
+    List<Quote> found;
+    if (kIsWeb) {
+      found = await localIndex.searchAll(terms);
+    } else {
+      try {
+        found = await api.searchAll(query, terms);
+      } on ApiException {
+        found = await localIndex.searchAll(terms);
+      }
+    }
     if (found.isNotEmpty) app.putCache(query, found);
     return found;
   }
@@ -905,7 +1140,11 @@ class _HomeScreenState extends State<HomeScreen> {
     } else if ((q['q'] ?? '').trim().isNotEmpty) {
       _send(q['q']);
     }
-    if (!kIsWeb) checkForUpdate(context);
+    if (kIsWeb) {
+      localIndex.preload();
+    } else {
+      checkForUpdate(context);
+    }
   }
 
   @override
@@ -1840,8 +2079,12 @@ class _SearchingIndicatorState extends State<SearchingIndicator>
         ),
         const SizedBox(width: 12),
         Expanded(
-          child: Text('جارٍ البحث في كتب الشيخ ابن عثيمين...',
-              style: TextStyle(color: scheme.onSurfaceVariant)),
+          child: ValueListenableBuilder<String>(
+            valueListenable: localIndex.status,
+            builder: (context, st, _) => Text(
+                st.isEmpty ? 'جارٍ البحث في كتب الشيخ ابن عثيمين...' : st,
+                style: TextStyle(color: scheme.onSurfaceVariant)),
+          ),
         ),
       ]),
     );
