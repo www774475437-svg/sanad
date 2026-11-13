@@ -77,13 +77,13 @@ List<InlineSpan> highlightSpans(String text, List<String> terms) {
   final n = normRaw(text, map: map, tags: false);
   final ranges = <List<int>>[];
   for (final nd in needles) {
-    var p = n.indexOf(nd);
+    var p = wordPos(n, nd);
     var count = 0;
     while (p >= 0 && count < 40) {
       final endN = p + nd.length;
       ranges.add(<int>[map[p], endN < map.length ? map[endN] : text.length]);
       count++;
-      p = n.indexOf(nd, endN);
+      p = wordPos(n, nd, endN);
     }
   }
   if (ranges.isEmpty) return <InlineSpan>[TextSpan(text: text)];
@@ -1736,7 +1736,7 @@ class _ShareCardScreenState extends State<ShareCardScreen> {
           child: SegmentedButton<String>(
             segments: const [
               ButtonSegment(value: 'green', label: Text('أخضر')),
-              ButtonSegment(value: 'black', label: Text('أسود وذهبي')),
+              ButtonSegment(value: 'black', label: Text('أسود')),
               ButtonSegment(value: 'paper', label: Text('ورقي')),
             ],
             selected: {_style},
