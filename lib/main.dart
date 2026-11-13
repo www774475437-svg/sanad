@@ -1025,6 +1025,7 @@ const Map<String, List<String>> _kSynonymsRaw = {
   'الحاجبين': ['النمص', 'الحواجب'],
   'حاجبيها': ['النمص', 'الحواجب'],
   'النمص': ['النامصة', 'الحواجب'],
+  'النمس': ['النمص'],
   'التدخين': ['شرب الدخان'],
   'السجائر': ['التدخين', 'شرب الدخان'],
   'الدخان': ['التدخين'],
@@ -1631,7 +1632,7 @@ ParsedQuestion parseQuestion(String raw) {
 
 class AnswerEngine {
   Future<List<Quote>> _search(List<String> terms) async {
-    final key = 'v5:${app.order}:${terms.join(' ')}';
+    final key = 'v6:${app.order}:${terms.join(' ')}';
     final cached = app.cached(key);
     if (cached != null) return cached;
     final g = groupsOf(terms);
