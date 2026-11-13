@@ -163,6 +163,12 @@ jobs:
         run: |
           curl -s -D - -o /dev/null -H "Origin: https://www774475437-svg.github.io" "https://api.turath.io/search?q=%D8%A7%D9%84%D9%86%D9%85%D8%B5&ver=3" | head -20 || true
 
+      - name: Cache book data
+        uses: actions/cache@v4
+        with:
+          path: web/data
+          key: sanad-data-v3-${{ hashFiles('tools/books.json', 'tools/build_data.py') }}
+
       - name: Build search data
         run: python3 tools/build_data.py web/data
 
