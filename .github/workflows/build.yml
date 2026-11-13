@@ -81,3 +81,56 @@ jobs:
         run: |
           cp build/app/outputs/flutter-apk/app-release.apk sanad.apk
           gh release create "v1.0.${{ github.run_number }}" sanad.apk --title "سَنَد v1.0.${{ github.run_number }}" --notes "النسخة الأولى من تطبيق سند" --latest
+
+  web:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Create web project
+        run: |
+          mkdir -p lib
+          if [ -f main.dart ]; then mv -f main.dart lib/main.dart; fi
+          flutter create --platforms=web --org com.alathari --project-name sanad .
+          rm -rf test
+          python3 - <<'PY'
+          p = 'web/index.html'
+          s = open(p, encoding='utf-8').read()
+          s = s.replace('<html>', '<html lang="ar" dir="rtl">', 1)
+          import re
+          s = re.sub(r'<title>[^<]*</title>', '<title>سَنَد</title>', s, count=1)
+          open(p, 'w', encoding='utf-8').write(s)
+          m = open('web/manifest.json', encoding='utf-8').read()
+          m = re.sub(r'"name":\s*"[^"]*"', '"name": "سَنَد"', m, count=1)
+          m = re.sub(r'"short_name":\s*"[^"]*"', '"short_name": "سند"', m, count=1)
+          open('web/manifest.json', 'w', encoding='utf-8').write(m)
+          PY
+
+      - run: flutter pub get
+
+      - name: Check turath CORS
+        run: |
+          curl -s -D - -o /dev/null -H "Origin: https://www774475437-svg.github.io" "https://api.turath.io/search?q=%D8%A7%D9%84%D9%86%D9%85%D8%B5&ver=3" | head -20 || true
+
+      - run: flutter build web --release --base-href /sanad/
+
+      - name: Deploy to GitHub Pages branch
+        uses: JamesIves/github-pages-deploy-action@v4
+        with:
+          folder: build/web
+          branch: gh-pages
+          clean: true
+
+      - name: Try to enable Pages
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api -X POST repos/${{ github.repository }}/pages -f "source[branch]=gh-pages" -f "source[path]=/" || echo "enable manually"
