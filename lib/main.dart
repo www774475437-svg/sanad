@@ -10,22 +10,33 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
+import 'dart:typed_data';
+import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:http/http.dart' as http;
 import 'package:qr_flutter/qr_flutter.dart';
+import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
+
+import 'norm.dart';
+import 'store_stub.dart' if (dart.library.io) 'store_io.dart';
+
+part 'books.dart';
+part 'extras.dart';
 
 // ---------------------------------------------------------------------
 //  الإعدادات الثابتة
 // ---------------------------------------------------------------------
 
 const String kAppName = 'سَنَد';
-const String kVersion = '1.2.0';
+const String kVersion = '1.3.0';
+const int kAuthorId = 57;
 const int kBuild = int.fromEnvironment('BUILD', defaultValue: 0);
 const String kSiteUrl = 'https://www774475437-svg.github.io/sanad/';
 const String kApkUrl =
@@ -85,18 +96,18 @@ const Color kHighlight = Color(0xFFFFF176);
 class Book {
   final int id;
   final String title;
-  const Book(this.id, this.title);
+  final int pages;
+  final int size;
+  final int cat;
+  const Book(this.id, this.title, {this.pages = 0, this.size = 0, this.cat = 0});
 }
 
-/// الكتب المعتمدة في الإصدار الأول (بالترتيب الذي يُعرض به الجواب).
-const List<Book> kBooks = [
-  Book(12293, 'مجموع فتاوى ورسائل العثيمين'),
-  Book(9260, 'شرح رياض الصالحين'),
-  Book(7339, 'القول المفيد على كتاب التوحيد'),
-  Book(11166, 'حكم تارك الصلاة'),
-  Book(11224, 'رسالة في زكاة الحلي'),
-  Book(31341, 'رسالة في الدماء الطبيعية للنساء'),
-];
+Book? bookOf(int id) {
+  for (final b in kBooks) {
+    if (b.id == id) return b;
+  }
+  return null;
+}
 
 String bookTitleOf(int id) {
   for (final b in kBooks) {
@@ -117,6 +128,7 @@ class Quote {
   final int pageId;
   final String text;
   final String issue;
+  final String title; // عنوان المسألة في الكتاب (إن عُرف)
 
   const Quote({
     required this.bookId,
@@ -126,7 +138,22 @@ class Quote {
     required this.pageId,
     required this.text,
     this.issue = '',
+    this.title = '',
   });
+
+  /// العنوان الذي يُعرض فوق النقل.
+  String get heading => title.isNotEmpty ? title : issue;
+
+  Quote copyWith({String? text, String? title}) => Quote(
+        bookId: bookId,
+        bookName: bookName,
+        vol: vol,
+        page: page,
+        pageId: pageId,
+        text: text ?? this.text,
+        issue: issue,
+        title: title ?? this.title,
+      );
 
   String get pageLabel {
     final v = vol.trim();
@@ -153,6 +180,7 @@ class Quote {
         pageId: pageId,
         text: text,
         issue: newIssue,
+        title: title,
       );
 
   Map<String, dynamic> toJson() => {
@@ -163,6 +191,7 @@ class Quote {
         'pid': pageId,
         't': text,
         'i': issue,
+        if (title.isNotEmpty) 'h': title,
       };
 
   factory Quote.fromJson(Map<String, dynamic> j) => Quote(
@@ -173,6 +202,7 @@ class Quote {
         pageId: asInt(j['pid']),
         text: asStr(j['t']),
         issue: asStr(j['i']),
+        title: asStr(j['h']),
       );
 }
 
@@ -182,6 +212,7 @@ class ChatMessage {
   final List<Quote> quotes;
   final String notice; // مثل: لم أجد للشيخ كلامًا
   final String issue;
+  final List<String> terms; // كلمات البحث التي استُعملت
 
   ChatMessage({
     required this.fromUser,
@@ -189,7 +220,9 @@ class ChatMessage {
     List<Quote>? quotes,
     this.notice = '',
     this.issue = '',
-  }) : quotes = quotes ?? <Quote>[];
+    List<String>? terms,
+  })  : quotes = quotes ?? <Quote>[],
+        terms = terms ?? const <String>[];
 
   Map<String, dynamic> toJson() => {
         'u': fromUser,
@@ -197,6 +230,7 @@ class ChatMessage {
         'q': quotes.map((q) => q.toJson()).toList(),
         'n': notice,
         'i': issue,
+        if (terms.isNotEmpty) 'k': terms,
       };
 
   factory ChatMessage.fromJson(Map<String, dynamic> j) => ChatMessage(
@@ -205,6 +239,9 @@ class ChatMessage {
         quotes: asMapList(j['q']).map((m) => Quote.fromJson(m)).toList(),
         notice: asStr(j['n']),
         issue: asStr(j['i']),
+        terms: j['k'] is List
+            ? (j['k'] as List).map((e) => '$e').toList()
+            : const <String>[],
       );
 }
 
@@ -378,7 +415,7 @@ Future<void> checkForUpdate(BuildContext context, {bool manual = false}) async {
 }
 
 String telegramFormat(Quote q) =>
-    '📜 ${q.issue.isEmpty ? 'من كلام الشيخ ابن عثيمين' : q.issue}\n\n'
+    '📜 ${q.heading.isEmpty ? 'من كلام الشيخ ابن عثيمين' : q.heading}\n\n'
     '▪️ $kScholarIntro\n'
     '«${q.text}،.🌿»\n\n'
     '> [📓${q.bookName} (صـ ${q.pageLabel})]';
@@ -406,6 +443,17 @@ class AppState extends ChangeNotifier {
   String palette = 'green';
   Map<String, String> notes = <String, String>{};
   List<Quote> later = <Quote>[];
+  bool dailyCard = true;
+  String order = 'fatwa';
+  Map<String, dynamic> bookPos = <String, dynamic>{};
+  List<Map<String, dynamic>> marks = <Map<String, dynamic>>[];
+  Map<String, String> folders = <String, String>{};
+  List<String> folderNames = <String>[];
+  double rSize = 19;
+  double rHeight = 1.95;
+  bool rAmiri = true;
+  String rBg = 'auto';
+  int streak = 0;
 
   Future<void> load() async {
     _p = await SharedPreferences.getInstance();
@@ -419,6 +467,23 @@ class AppState extends ChangeNotifier {
     promptedUpdate = p.getInt('promptedUpdate') ?? 0;
     palette = p.getString('palette') ?? 'green';
     later = _decode(p.getString('later')).map((m) => Quote.fromJson(m)).toList();
+    dailyCard = p.getBool('dailyCard') ?? true;
+    order = p.getString('order') ?? 'fatwa';
+    marks = _decode(p.getString('marks'));
+    folderNames = p.getStringList('folderNames') ?? <String>[];
+    rSize = p.getDouble('rSize') ?? 19;
+    rHeight = p.getDouble('rHeight') ?? 1.95;
+    rAmiri = p.getBool('rAmiri') ?? true;
+    rBg = p.getString('rBg') ?? 'auto';
+    streak = p.getInt('streak') ?? 0;
+    try {
+      final bp = jsonDecode(p.getString('bookPos') ?? '{}');
+      if (bp is Map) bookPos = Map<String, dynamic>.from(bp);
+      final fj = jsonDecode(p.getString('folders') ?? '{}');
+      if (fj is Map) {
+        fj.forEach((k, v) => folders['$k'] = '$v');
+      }
+    } catch (_) {}
     try {
       final nj = jsonDecode(p.getString('notes') ?? '{}');
       if (nj is Map) {
@@ -513,6 +578,122 @@ class AppState extends ChangeNotifier {
 
   void bumpRead() {
     _p?.setInt(_monthKey, monthReads + 1);
+    final n = DateTime.now();
+    final today = '${n.year}-${n.month}-${n.day}';
+    final last = _p?.getString('streakDay') ?? '';
+    if (last == today) return;
+    final y = n.subtract(const Duration(days: 1));
+    streak = last == '${y.year}-${y.month}-${y.day}' ? streak + 1 : 1;
+    _p?.setInt('streak', streak);
+    _p?.setString('streakDay', today);
+  }
+
+  /// عدد الأيام المتتالية التي قرأ فيها (صفر إن انقطع).
+  int get streakNow {
+    final n = DateTime.now();
+    final y = n.subtract(const Duration(days: 1));
+    final last = _p?.getString('streakDay') ?? '';
+    if (last == '${n.year}-${n.month}-${n.day}' ||
+        last == '${y.year}-${y.month}-${y.day}') {
+      return streak;
+    }
+    return 0;
+  }
+
+  void setDaily(bool v) {
+    dailyCard = v;
+    _p?.setBool('dailyCard', v);
+    notifyListeners();
+  }
+
+  void setOrder(String v) {
+    order = v;
+    _p?.setString('order', v);
+    notifyListeners();
+  }
+
+  void setReader({double? size, double? height, bool? amiri, String? bg}) {
+    if (size != null) {
+      rSize = size;
+      _p?.setDouble('rSize', size);
+    }
+    if (height != null) {
+      rHeight = height;
+      _p?.setDouble('rHeight', height);
+    }
+    if (amiri != null) {
+      rAmiri = amiri;
+      _p?.setBool('rAmiri', amiri);
+    }
+    if (bg != null) {
+      rBg = bg;
+      _p?.setString('rBg', bg);
+    }
+    notifyListeners();
+  }
+
+  int posOf(int bookId) {
+    final m = bookPos['$bookId'];
+    return m is Map ? asInt(m['p']) : 0;
+  }
+
+  String posLabelOf(int bookId) {
+    final m = bookPos['$bookId'];
+    return m is Map ? asStr(m['l']) : '';
+  }
+
+  bool isMarked(int bookId, int pageId) =>
+      marks.any((m) => asInt(m['b']) == bookId && asInt(m['pid']) == pageId);
+
+  bool toggleMark(int bookId, String bookName, int pageId, String label) {
+    final i = marks
+        .indexWhere((m) => asInt(m['b']) == bookId && asInt(m['pid']) == pageId);
+    final added = i < 0;
+    if (added) {
+      marks.insert(0, {
+        'b': bookId,
+        'n': bookName,
+        'pid': pageId,
+        'l': label,
+        'at': DateTime.now().millisecondsSinceEpoch,
+      });
+    } else {
+      marks.removeAt(i);
+    }
+    _p?.setString('marks', jsonEncode(marks));
+    notifyListeners();
+    return added;
+  }
+
+  String folderOf(Quote q) => folders[q.key] ?? '';
+
+  void setFolder(Quote q, String name) {
+    if (name.isEmpty) {
+      folders.remove(q.key);
+    } else {
+      folders[q.key] = name;
+      if (!folderNames.contains(name)) {
+        folderNames.add(name);
+        _p?.setStringList('folderNames', folderNames);
+      }
+    }
+    _p?.setString('folders', jsonEncode(folders));
+    notifyListeners();
+  }
+
+  void addFolder(String name) {
+    if (name.isEmpty || folderNames.contains(name)) return;
+    folderNames.add(name);
+    _p?.setStringList('folderNames', folderNames);
+    notifyListeners();
+  }
+
+  void removeFolder(String name) {
+    folderNames.remove(name);
+    folders.removeWhere((k, v) => v == name);
+    _p?.setStringList('folderNames', folderNames);
+    _p?.setString('folders', jsonEncode(folders));
+    notifyListeners();
   }
 
   void addRecent(String q) {
@@ -580,6 +761,8 @@ class AppState extends ChangeNotifier {
   void setLastRead(int bookId, String bookName, int pageId, String label) {
     lastRead = {'b': bookId, 'n': bookName, 'pid': pageId, 'l': label};
     _p?.setString('lastRead', jsonEncode(lastRead));
+    bookPos['$bookId'] = {'p': pageId, 'l': label};
+    _p?.setString('bookPos', jsonEncode(bookPos));
     notifyListeners();
   }
 
@@ -699,84 +882,93 @@ class TurathApi {
     return const <dynamic>[];
   }
 
-  /// يبحث في كتاب واحد ويرجع حتى [limit] نتائج.
-  Future<List<Quote>> searchBook(Book book, String query, List<String> terms,
-      {int limit = 3}) async {
-    final body = await _get('/search', {
-      'q': query,
-      'ver': '3',
-      'book': '${book.id}',
-    });
+  /// يبحث في كل كتب الشيخ بطلب واحد (أو في كتاب واحد إن حُدِّد).
+  Future<List<Quote>> searchAuthor(String query, {int? book}) async {
+    final params = <String, String>{'q': query, 'ver': '3'};
+    if (book != null) {
+      params['book'] = '$book';
+    } else {
+      params['author'] = '$kAuthorId';
+    }
+    final body = await _get('/search', params);
+    final terms = query.split(' ');
     final out = <Quote>[];
-    final seenPages = <int>{};
+    final seen = <String>{};
     for (final it in _items(body)) {
       final m = flatten(it);
-      final bid = asInt(m['book_id']);
-      if (bid != 0 && bid != book.id) continue; // نتيجة من كتاب آخر: تُترك
-      final pageId = asInt(m['page_id'] ?? m['pg'] ?? m['id']);
-      if (pageId > 0 && !seenPages.add(pageId)) continue;
+      final b = bookOf(asInt(m['book_id']));
+      if (b == null) continue; // ليس من كتب الشيخ المعتمدة: يُترك
+      if (book != null && b.id != book) continue;
+      final pageId = asInt(m['page_id'] ?? m['pg']);
+      if (!seen.add('${b.id}:$pageId')) continue;
       var text = cleanHtml(asStr(m['snip']));
       if (text.isEmpty) text = cleanHtml(asStr(m['text']));
       if (text.isEmpty) continue;
       text = excerptAround(text, terms);
+      var title = '';
+      final hs = m['headings'];
+      if (hs is List) {
+        for (final h in hs.reversed) {
+          final t = '$h'.trim();
+          if (t.isNotEmpty) {
+            title = t;
+            break;
+          }
+        }
+      }
       out.add(Quote(
-        bookId: book.id,
-        bookName: book.title,
+        bookId: b.id,
+        bookName: b.title,
         vol: asStr(m['vol']),
         page: asStr(m['page']),
         pageId: pageId,
         text: text,
+        title: title,
       ));
-      if (out.length >= limit) break;
     }
     return out;
   }
 
-  /// يبحث في كل الكتب المعتمدة بالترتيب.
-  Future<List<Quote>> searchAll(String query, List<String> terms) async {
-    final all = <Quote>[];
-    var failures = 0;
-    for (final b in kBooks) {
-      try {
-        all.addAll(await searchBook(b, query, terms));
-      } on ApiException catch (e) {
-        if (e.busy) rethrow;
-        failures++;
-      }
-      await Future<void>.delayed(const Duration(milliseconds: 120));
+  /// [vol, page, rawHtml] للصفحة: من الهاتف إن كان الكتاب منزّلًا، وإلا من «تراث».
+  Future<List<String>> rawPage(int bookId, int pg) async {
+    if (pg < 1) return <String>['', '', ''];
+    if (kIsWeb || storeHas(bookId)) return localIndex.pageData(bookId, pg - 1);
+    try {
+      final body = await _get('/page', {
+        'book_id': '$bookId',
+        'pg': '$pg',
+        'ver': '3',
+      });
+      dynamic node = body;
+      if (body is Map && body['data'] is Map) node = body['data'];
+      final m = flatten(node);
+      return <String>[
+        asStr(m['vol']).trim(),
+        asStr(m['page']).trim(),
+        asStr(m['text']),
+      ];
+    } on ApiException {
+      return localIndex.pageData(bookId, pg - 1);
     }
-    if (failures == kBooks.length) throw ApiException('all failed');
-    return all;
   }
 
   Future<PageData> page(int bookId, int pg) async {
-    if (kIsWeb) return localIndex.page(bookId, pg);
-    final body = await _get('/page', {
-      'book_id': '$bookId',
-      'pg': '$pg',
-      'ver': '3',
-    });
-    dynamic node = body;
-    if (body is Map && body['data'] is Map) node = body['data'];
-    final m = flatten(node);
-    final rawText = asStr(m['text']);
-    final text = cleanHtml(rawText);
-    final vol = asStr(m['vol']).trim();
-    final pageNo = asStr(m['page']).trim();
-    final label = pageNo.isEmpty
+    final d = await rawPage(bookId, pg);
+    if (d[2].isEmpty) return PageData('', '');
+    final label = d[1].isEmpty
         ? ''
-        : ((vol.isEmpty || vol == '0') ? pageNo : '$vol/$pageNo');
-    return PageData(text, label, _rawHasTitle(rawText));
+        : ((d[0].isEmpty || d[0] == '0') ? d[1] : '${d[0]}/${d[1]}');
+    return PageData(cleanHtml(d[2]), label, _rawHasTitle(d[2]));
   }
 
   /// فحص الاتصال: يرجع وصفًا مختصرًا لنتيجة بحث تجريبي.
   Future<String> diagnose() async {
     if (kIsWeb) {
       final lb = await localIndex.page(11224, 5);
-      return 'نجح قراءة ملفات الكتب مباشرة من تراث.\nمقتطف: ${lb.text.length > 120 ? lb.text.substring(0, 120) : lb.text}';
+      return 'نجح قراءة ملفات الكتب.\nمقتطف: ${lb.text.length > 120 ? lb.text.substring(0, 120) : lb.text}';
     }
-    final body =
-        await _get('/search', {'q': 'الصلاة', 'ver': '3', 'book': '12293'});
+    final body = await _get(
+        '/search', {'q': 'الصلاة', 'ver': '3', 'author': '$kAuthorId'});
     final items = _items(body);
     final b = StringBuffer('نجح الاتصال بتراث.\nعدد النتائج: ${items.length}\n');
     if (items.isNotEmpty) {
@@ -787,6 +979,7 @@ class TurathApi {
       final s = cleanHtml(snip.isEmpty ? asStr(m['text']) : snip);
       b.writeln('مقتطف: ${s.length > 120 ? s.substring(0, 120) : s}');
     }
+    b.writeln('الكتب المنزّلة على الهاتف: ${storeIds().length}');
     return b.toString();
   }
 }
@@ -797,41 +990,239 @@ final TurathApi api = TurathApi();
 //  البحث المحلي في ملفات الكتب (يعمل في المتصفح بلا حدّ للطلبات)
 // ---------------------------------------------------------------------
 
-int _nc(int c) {
-  if ((c >= 0x064B && c <= 0x065F) || c == 0x0670 || c == 0x0640) return -1;
-  if (c == 0x0623 || c == 0x0625 || c == 0x0622 || c == 0x0671) return 0x0627;
-  if (c == 0x0649) return 0x064A;
-  if (c == 0x0629) return 0x0647;
-  if (c == 10 || c == 13 || c == 9 || c == 0xA0) return 32;
-  return c;
+/// مجموعات كلمات البحث: كل مجموعة فيها الكلمة ومرادفاتها (موحَّدة).
+typedef TermGroups = List<List<String>>;
+
+/// الكتب التي يُبحث في نصها كاملًا في المتصفح (والبقية يُبحث في عناوين مسائلها).
+const Set<int> kCoreIds = {
+  12293, 9924, 11377, 96334, 14242, 21576, 9260, 7339, 11166, 11224, 31341,
+  7470, 21528,
+};
+
+/// كتب الفتاوى والأسئلة (تُقدَّم أو تُؤخَّر حسب اختيار المستخدم).
+const Set<int> kFatwaIds = {7686, 11377, 7470, 21528, 11069};
+
+bool isFatwaBook(int id) {
+  if (kFatwaIds.contains(id)) return true;
+  final b = bookOf(id);
+  return b != null && b.cat == 22;
 }
 
-/// يوحّد النص للمقارنة: بلا تشكيل ولا تطويل، وتُوحَّد الألف والياء والتاء المربوطة.
-/// إن مُرِّرت [map] فتُملأ بموضع كل حرف في النص الأصلي.
-String _normRaw(String raw, {List<int>? map, bool tags = true}) {
-  final sb = StringBuffer();
-  var inTag = false;
-  for (var i = 0; i < raw.length; i++) {
-    final c = raw.codeUnitAt(i);
-    if (tags) {
-      if (c == 60) {
-        inTag = true;
-        continue;
-      }
-      if (inTag) {
-        if (c == 62) inTag = false;
-        continue;
-      }
-    }
-    final m = _nc(c);
-    if (m < 0) continue;
-    sb.writeCharCode(m);
-    map?.add(i);
+double catBoost(int bookId) {
+  switch (app.order) {
+    case 'fatwa':
+      return isFatwaBook(bookId) ? 12 : 0;
+    case 'sharh':
+      return isFatwaBook(bookId) ? 0 : 12;
   }
-  return sb.toString();
+  return 0;
 }
 
-String normArabic(String s) => _normRaw(s, tags: false);
+/// مرادفات شائعة: يكتب السائل كلمة ويُبحث معها عن أختها.
+const Map<String, List<String>> _kSynonymsRaw = {
+  'الحواجب': ['النمص', 'الحاجب'],
+  'الحاجب': ['النمص', 'الحواجب'],
+  'الحاجبين': ['النمص', 'الحواجب'],
+  'حاجبيها': ['النمص', 'الحواجب'],
+  'النمص': ['النامصة', 'الحواجب'],
+  'التدخين': ['الدخان'],
+  'السجائر': ['الدخان', 'التدخين'],
+  'الدخان': ['التدخين'],
+  'الشيشة': ['الدخان'],
+  'الأغاني': ['الغناء', 'المعازف'],
+  'الموسيقى': ['المعازف', 'الغناء'],
+  'الغناء': ['المعازف', 'الأغاني'],
+  'المعازف': ['الغناء', 'الموسيقى'],
+  'التلفزيون': ['التلفاز'],
+  'التلفاز': ['التلفزيون'],
+  'الصور': ['التصوير'],
+  'التصوير': ['الصور'],
+  'البنك': ['البنوك'],
+  'البنوك': ['البنك'],
+  'الفوائد': ['الربا'],
+  'الباروكة': ['الوصل', 'الشعر المستعار'],
+  'المكياج': ['التجمل', 'الزينة'],
+  'الدورة': ['الحيض'],
+  'الحيض': ['الحائض'],
+  'الحائض': ['الحيض'],
+  'النفاس': ['النفساء'],
+  'اللحية': ['اللحى'],
+  'الإسبال': ['المسبل'],
+  'الجوال': ['الهاتف'],
+  'الموبايل': ['الجوال', 'الهاتف'],
+  'العرس': ['الزواج', 'النكاح'],
+  'الزواج': ['النكاح'],
+  'النكاح': ['الزواج'],
+  'الصيام': ['الصوم'],
+  'الصوم': ['الصيام'],
+  'الأضحية': ['الأضاحي'],
+  'السفر': ['المسافر'],
+  'المسافر': ['السفر'],
+  'الكلب': ['الكلاب'],
+  'الخمر': ['المسكر'],
+  'المخدرات': ['المسكر', 'الحشيش'],
+  'الأظافر': ['الأظفار'],
+  'الأظفار': ['الأظافر'],
+  'القبور': ['المقابر', 'القبر'],
+  'المقابر': ['القبور'],
+  'السحر': ['الساحر'],
+  'الحسد': ['العين'],
+  'الجن': ['الشياطين'],
+  'التراويح': ['قيام رمضان'],
+  'العيد': ['العيدين'],
+  'المولد': ['الموالد'],
+  'الوالدين': ['الوالدان', 'بر الوالدين'],
+  'الطلاق': ['طلق', 'المطلقة'],
+  'الرضاع': ['الرضاعة'],
+  'الرضاعة': ['الرضاع'],
+};
+
+final Map<String, List<String>> _kSynonyms = {
+  for (final e in _kSynonymsRaw.entries) normArabic(e.key): e.value,
+};
+
+List<String> synonymsOf(String term) =>
+    _kSynonyms[normArabic(term)] ?? const <String>[];
+
+/// جذر مبسّط: يحذف «ال» وأخواتها من أول الكلمة ليطابق صيغًا أكثر.
+String needleOf(String n) {
+  for (final p in const ['وال', 'بال', 'كال', 'فال']) {
+    if (n.startsWith(p) && n.length >= 6) return n.substring(3);
+  }
+  if (n.startsWith('لل') && n.length >= 5) return n.substring(2);
+  if (n.startsWith('ال') && n.length >= 5) return n.substring(2);
+  return n;
+}
+
+TermGroups groupsOf(List<String> terms) {
+  final out = <List<String>>[];
+  for (final t in terms) {
+    final n = normArabic(t).trim();
+    if (n.length < 2) continue;
+    final alts = <String>[needleOf(n)];
+    for (final s in synonymsOf(t)) {
+      final x = needleOf(normArabic(s).trim());
+      if (x.length >= 2 && !alts.contains(x)) alts.add(x);
+    }
+    out.add(alts);
+  }
+  return out;
+}
+
+bool hasAny(String hay, List<String> alts) {
+  for (final a in alts) {
+    if (hay.contains(a)) return true;
+  }
+  return false;
+}
+
+bool matchesAll(String hay, TermGroups g) {
+  for (final a in g) {
+    if (!hasAny(hay, a)) return false;
+  }
+  return true;
+}
+
+int firstPos(String hay, TermGroups g) {
+  var p = -1;
+  for (final alts in g) {
+    for (final a in alts) {
+      final q = hay.indexOf(a);
+      if (q >= 0 && (p < 0 || q < p)) p = q;
+    }
+  }
+  return p;
+}
+
+/// بدائل إملائية قريبة (س/ص، ت/ط، ذ/ز، ض/ظ) تُجرَّب إن لم توجد نتيجة.
+List<List<String>> typoVariants(List<String> terms) {
+  const swap = {
+    'س': 'ص', 'ص': 'س', 'ت': 'ط', 'ط': 'ت', 'ذ': 'ز', 'ز': 'ذ',
+    'ض': 'ظ', 'ظ': 'ض', 'ث': 'س',
+  };
+  final out = <List<String>>[];
+  for (var i = 0; i < terms.length; i++) {
+    final t = terms[i];
+    for (var j = 0; j < t.length; j++) {
+      final r = swap[t[j]];
+      if (r == null) continue;
+      final v = '${t.substring(0, j)}$r${t.substring(j + 1)}';
+      out.add([...terms]..[i] = v);
+      if (out.length >= 8) return out;
+    }
+  }
+  return out;
+}
+
+/// يقتطع من الصفحة الخام المسألةَ التي فيها كلمات البحث (من عنوانها إلى العنوان التالي).
+({String text, String title}) sectionExcerpt(String raw, TermGroups g,
+    {String title = '', int size = 1300}) {
+  if (raw.isEmpty) return (text: '', title: '');
+  final map = <int>[];
+  final n = normRaw(raw, map: map);
+  var p = -1;
+  if (title.isNotEmpty) {
+    final nt = normArabic(title);
+    p = n.indexOf(nt.length > 24 ? nt.substring(0, 24) : nt);
+  }
+  if (p < 0) p = firstPos(n, g);
+  final rawPos = p >= 0 && p < map.length ? map[p] : 0;
+  const tag = '<span data-type="title"';
+  var s = raw.lastIndexOf(tag, rawPos);
+  var found = '';
+  if (s >= 0) {
+    final close = raw.indexOf('</span>', s);
+    if (close > s) found = cleanHtml(raw.substring(s, close)).trim();
+  } else {
+    s = 0;
+  }
+  var e = raw.indexOf(tag, math.max(rawPos, s + 1));
+  if (e < 0) e = raw.length;
+  final cleaned = cleanHtml(raw.substring(s, e)).trim();
+  if (cleaned.length <= size) return (text: cleaned, title: found);
+  // إن كانت الكلمة قريبة من أول المسألة نبدأ من أولها ليظهر السؤال.
+  final cmap = <int>[];
+  final cn = normRaw(cleaned, map: cmap, tags: false);
+  final cp = firstPos(cn, g);
+  final c = cp >= 0 && cp < cmap.length ? cmap[cp] : 0;
+  var start = c < size - 200 ? 0 : math.max(0, c - 250);
+  var end = math.min(cleaned.length, start + size);
+  if (start > 0) {
+    final sp = cleaned.indexOf(' ', start);
+    if (sp >= 0 && sp < start + 40) start = sp + 1;
+  }
+  if (end < cleaned.length) {
+    final sp = cleaned.lastIndexOf(' ', end);
+    if (sp > start + size ~/ 2) end = sp;
+  }
+  return (
+    text: '${start > 0 ? '…' : ''}${cleaned.substring(start, end).trim()}'
+        '${end < cleaned.length ? '…' : ''}',
+    title: found,
+  );
+}
+
+/// يرتّب النقول: ما طابق عنوانُ مسألته السؤالَ أولًا.
+List<Quote> rankQuotes(List<Quote> list, TermGroups g) {
+  final scored = <MapEntry<Quote, double>>[];
+  for (var i = 0; i < list.length; i++) {
+    final q = list[i];
+    var s = -i * 0.6;
+    if (q.title.isNotEmpty && g.isNotEmpty) {
+      final t = normArabic(q.title);
+      var hit = 0;
+      for (final a in g) {
+        if (hasAny(t, a)) hit++;
+      }
+      s += 60.0 * hit / g.length;
+      if (hit == g.length) s += 25;
+    }
+    s += catBoost(q.bookId);
+    scored.add(MapEntry(q, s));
+  }
+  scored.sort((a, b) => b.value.compareTo(a.value));
+  return scored.map((e) => e.key).toList();
+}
 
 class LocalBook {
   final Book book;
@@ -839,41 +1230,115 @@ class LocalBook {
   const LocalBook(this.book, this.norms);
 }
 
-/// بحث محلي: ملف نصي مبسّط لكل كتاب (سطر لكل صفحة) ثم تُجلب الصفحات الأصلية عند الحاجة.
+class Headings {
+  final List<int> books = <int>[];
+  final List<int> pages = <int>[];
+  final List<String> titles = <String>[];
+  final List<String> norms = <String>[];
+}
+
+class TocEntry {
+  final int level;
+  final int page;
+  final String title;
+  const TocEntry(this.level, this.page, this.title);
+}
+
+/// البيانات المحلية: فهرس عناوين كل الكتب، وملفات بحث نصي، وصفحات الكتب.
+/// تُقرأ من الهاتف إن كان الكتاب منزّلًا، وإلا من موقع سَنَد.
 class LocalIndex {
   static const int chunkSize = 20;
   final Map<int, Future<LocalBook>> _books = {};
   final Map<String, Future<List<dynamic>>> _chunks = {};
+  final Map<int, Future<List<TocEntry>>> _tocs = {};
+  Future<Headings>? _heads;
+  Headings? headsNow;
   final ValueNotifier<String> status = ValueNotifier<String>('');
-  int _done = 0;
 
   String get _base => '${kSiteUrl}data/';
+
+  Future<String> _getText(String url, {int seconds = 120}) async {
+    final r = await http.get(Uri.parse(url)).timeout(Duration(seconds: seconds));
+    if (r.statusCode != 200) throw ApiException('HTTP ${r.statusCode}');
+    return utf8.decode(r.bodyBytes);
+  }
+
+  void forget(int bookId) {
+    _books.remove(bookId);
+    _tocs.remove(bookId);
+    _chunks.removeWhere((k, _) => k.startsWith('$bookId:'));
+  }
 
   Future<LocalBook> _load(Book b) => _books.putIfAbsent(b.id, () => _fetch(b));
 
   Future<LocalBook> _fetch(Book b) async {
-    if (status.value.isEmpty) {
-      status.value = 'جارٍ تجهيز كتب الشيخ (أول مرة فقط)... $_done/${kBooks.length}';
-    }
     try {
-      final r = await http
-          .get(Uri.parse('${_base}n${b.id}.txt'))
-          .timeout(const Duration(seconds: 180));
-      if (r.statusCode != 200) throw ApiException('HTTP ${r.statusCode}');
-      final lines = utf8.decode(r.bodyBytes).split('\n');
+      var text = await storeRead(b.id, 'n.txt');
+      if (text == null) {
+        status.value = 'جارٍ تجهيز «${b.title}» للبحث (أول مرة فقط)...';
+        text = await _getText('${_base}n${b.id}.txt', seconds: 180);
+      }
+      final lines = text.split('\n');
       if (lines.isNotEmpty && lines.last.isEmpty) lines.removeLast();
-      _done++;
-      status.value = _done >= kBooks.length
-          ? ''
-          : 'جارٍ تجهيز كتب الشيخ (أول مرة فقط)... $_done/${kBooks.length}';
-      return LocalBook(b, lines);
-    } on ApiException {
-      _books.remove(b.id);
       status.value = '';
-      rethrow;
+      return LocalBook(b, lines);
     } catch (e) {
       _books.remove(b.id);
       status.value = '';
+      if (e is ApiException) rethrow;
+      throw ApiException('local: $e');
+    }
+  }
+
+  Future<Headings> headings() => _heads ??= _fetchHeads();
+
+  Future<Headings> _fetchHeads() async {
+    try {
+      final text = await _getText('${_base}h.txt', seconds: 180);
+      final h = Headings();
+      for (final line in text.split('\n')) {
+        final a = line.indexOf('\t');
+        if (a < 0) continue;
+        final b = line.indexOf('\t', a + 1);
+        if (b < 0) continue;
+        final id = int.tryParse(line.substring(0, a));
+        final pg = int.tryParse(line.substring(a + 1, b));
+        if (id == null || pg == null) continue;
+        final t = line.substring(b + 1);
+        h.books.add(id);
+        h.pages.add(pg);
+        h.titles.add(t);
+        h.norms.add(normArabic(t));
+      }
+      headsNow = h;
+      return h;
+    } catch (e) {
+      _heads = null;
+      if (e is ApiException) rethrow;
+      throw ApiException('local: $e');
+    }
+  }
+
+  Future<List<TocEntry>> toc(int bookId) =>
+      _tocs.putIfAbsent(bookId, () => _fetchToc(bookId));
+
+  Future<List<TocEntry>> _fetchToc(int bookId) async {
+    try {
+      final text = await storeRead(bookId, 't.json') ??
+          await _getText('${_base}t$bookId.json');
+      final d = jsonDecode(text);
+      final out = <TocEntry>[];
+      if (d is List) {
+        for (final e in d) {
+          if (e is List && e.length >= 3) {
+            out.add(TocEntry(asInt(e[0]), asInt(e[1]), asStr(e[2])));
+          }
+        }
+      }
+      return out;
+    } catch (e) {
+      _tocs.remove(bookId);
+      if (e is ApiException) rethrow;
       throw ApiException('local: $e');
     }
   }
@@ -883,11 +1348,9 @@ class LocalIndex {
     final key = '$bookId:$k';
     return _chunks.putIfAbsent(key, () async {
       try {
-        final r = await http
-            .get(Uri.parse('${_base}p${bookId}_$k.json'))
-            .timeout(const Duration(seconds: 60));
-        if (r.statusCode != 200) throw ApiException('HTTP ${r.statusCode}');
-        final d = jsonDecode(utf8.decode(r.bodyBytes));
+        final text = await storeRead(bookId, 'p_$k.json') ??
+            await _getText('${_base}p${bookId}_$k.json', seconds: 60);
+        final d = jsonDecode(text);
         if (d is! List) throw ApiException('bad chunk');
         return d;
       } catch (e) {
@@ -899,7 +1362,8 @@ class LocalIndex {
   }
 
   /// [vol, page, rawHtml] للصفحة ذات الرقم (من 0).
-  Future<List<String>> _pageData(int bookId, int i) async {
+  Future<List<String>> pageData(int bookId, int i) async {
+    if (i < 0) return ['', '', ''];
     final ch = await _chunk(bookId, i ~/ chunkSize);
     final j = i % chunkSize;
     if (j >= ch.length) return ['', '', ''];
@@ -910,42 +1374,98 @@ class LocalIndex {
     return ['${e[0] ?? ''}', pg, '${e[2] ?? ''}'];
   }
 
-  /// الأصغر أولًا والأكبر (مجموع الفتاوى) آخرًا، واحدًا بعد واحد لتخفيف الذاكرة.
-  List<Book> get _ordered =>
-      [...kBooks.where((b) => b.id != 12293), ...kBooks.where((b) => b.id == 12293)];
+  /// كتب البحث النصي الكامل: في التطبيق الكتب المنزّلة، وإلا الكتب الأساسية.
+  List<Book> get _fullText {
+    final ids = storeIds();
+    final list = (!kIsWeb && ids.isNotEmpty)
+        ? kBooks.where((b) => ids.contains(b.id)).toList()
+        : kBooks.where((b) => kCoreIds.contains(b.id)).toList();
+    list.sort((a, b) => a.size.compareTo(b.size));
+    return list;
+  }
+
+  bool hasFullText(int bookId) => _fullText.any((b) => b.id == bookId);
 
   Future<void> preload() async {
-    for (final b in _ordered) {
+    try {
+      await headings();
+    } catch (_) {}
+    for (final b in _fullText) {
       try {
         await _load(b);
       } catch (_) {}
     }
   }
 
-  Future<List<Quote>> searchAll(List<String> terms, {int perBook = 3}) async {
-    final nt = terms.map(normArabic).where((t) => t.isNotEmpty).toList();
-    if (nt.isEmpty) return <Quote>[];
-    final books = <LocalBook>[];
+  Future<Quote?> quoteAt(Book b, int pageIdx, TermGroups g,
+      {String title = ''}) async {
+    final d = await pageData(b.id, pageIdx);
+    final ex = sectionExcerpt(d[2], g, title: title);
+    if (ex.text.isEmpty) return null;
+    return Quote(
+      bookId: b.id,
+      bookName: b.title,
+      vol: d[0],
+      page: d[1],
+      pageId: pageIdx + 1,
+      text: ex.text,
+      title: title.isNotEmpty ? title : ex.title,
+    );
+  }
+
+  Future<List<Quote>> searchAll(TermGroups g, {int? onlyBook}) async {
+    if (g.isEmpty) return <Quote>[];
+    final out = <Quote>[];
+    final seen = <String>{};
     Object? lastError;
-    for (final b in _ordered) {
+    var okAny = false;
+    // 1) عناوين المسائل في كل الكتب
+    try {
+      final h = await headings();
+      okAny = true;
+      final hits = <int>[];
+      for (var i = 0; i < h.norms.length; i++) {
+        if (onlyBook != null && h.books[i] != onlyBook) continue;
+        if (matchesAll(h.norms[i], g)) hits.add(i);
+      }
+      double score(int i) => catBoost(h.books[i]) - h.norms[i].length / 40.0;
+      hits.sort((a, b) => score(b).compareTo(score(a)));
+      for (final i in hits.take(onlyBook != null ? 25 : 10)) {
+        final b = bookOf(h.books[i]);
+        if (b == null) continue;
+        if (!seen.add('${b.id}:${h.pages[i]}')) continue;
+        try {
+          final q = await quoteAt(b, h.pages[i] - 1, g, title: h.titles[i]);
+          if (q != null) out.add(q);
+        } catch (e) {
+          lastError = e;
+        }
+      }
+    } catch (e) {
+      lastError = e;
+    }
+    // 2) النص الكامل
+    final books = onlyBook != null
+        ? _fullText.where((b) => b.id == onlyBook).toList()
+        : _fullText;
+    for (final b in books) {
       try {
-        books.add(await _load(b));
+        final lb = await _load(b);
+        okAny = true;
+        for (final i in _topPages(lb, g, onlyBook != null ? 20 : 2)) {
+          if (!seen.add('${b.id}:${i + 1}')) continue;
+          final q = await quoteAt(b, i, g);
+          if (q != null) out.add(q);
+        }
       } catch (e) {
         lastError = e;
       }
     }
-    if (books.isEmpty) throw ApiException('local: $lastError');
-    books.sort((x, y) => kBooks
-        .indexWhere((b) => b.id == x.book.id)
-        .compareTo(kBooks.indexWhere((b) => b.id == y.book.id)));
-    final out = <Quote>[];
-    for (final lb in books) {
-      out.addAll(await _searchBook(lb, nt, perBook));
-    }
+    if (!okAny) throw ApiException('local: $lastError');
     return out;
   }
 
-  Future<List<Quote>> _searchBook(LocalBook lb, List<String> nt, int limit) async {
+  List<int> _topPages(LocalBook lb, TermGroups g, int limit) {
     final scored = <MapEntry<int, double>>[];
     for (var i = 0; i < lb.norms.length; i++) {
       final n = lb.norms[i];
@@ -953,8 +1473,16 @@ class LocalIndex {
       var occ = 0;
       var minP = 1 << 30;
       var maxP = -1;
-      for (final t in nt) {
-        final p = n.indexOf(t);
+      for (final alts in g) {
+        var p = -1;
+        var t = '';
+        for (final a in alts) {
+          final q = n.indexOf(a);
+          if (q >= 0 && (p < 0 || q < p)) {
+            p = q;
+            t = a;
+          }
+        }
         if (p < 0) {
           ok = false;
           break;
@@ -970,76 +1498,16 @@ class LocalIndex {
         occ += c;
       }
       if (!ok) continue;
-      final spread = nt.length > 1 ? (maxP - minP) : 0;
+      final spread = g.length > 1 ? (maxP - minP) : 0;
       scored.add(MapEntry(i, occ + 12 / (1 + spread / 150.0)));
     }
     scored.sort((a, b) => b.value.compareTo(a.value));
-    final out = <Quote>[];
-    for (final e in scored.take(limit)) {
-      try {
-        final q = await _extract(lb, e.key, nt);
-        if (q != null) out.add(q);
-      } catch (_) {}
-    }
-    return out;
-  }
-
-  Future<Quote?> _extract(LocalBook lb, int i, List<String> nt) async {
-    final d = await _pageData(lb.book.id, i);
-    final raw = d[2];
-    if (raw.isEmpty) return null;
-    final map = <int>[];
-    final n = _normRaw(raw, map: map);
-    var p = -1;
-    for (final t in nt) {
-      final q = n.indexOf(t);
-      if (q >= 0 && (p < 0 || q < p)) p = q;
-    }
-    final rawPos = p >= 0 && p < map.length ? map[p] : 0;
-    const tag = '<span data-type="title"';
-    var s = raw.lastIndexOf(tag, rawPos);
-    if (s < 0) s = 0;
-    var e = raw.indexOf(tag, rawPos);
-    if (e < 0) e = raw.length;
-    final text = _excerpt(cleanHtml(raw.substring(s, e)), nt);
-    if (text.isEmpty) return null;
-    return Quote(
-      bookId: lb.book.id,
-      bookName: lb.book.title,
-      vol: d[0],
-      page: d[1],
-      pageId: i + 1,
-      text: text,
-    );
-  }
-
-  String _excerpt(String cleaned, List<String> nt, {int size = 1300}) {
-    if (cleaned.length <= size) return cleaned;
-    final map = <int>[];
-    final n = _normRaw(cleaned, map: map, tags: false);
-    var p = -1;
-    for (final t in nt) {
-      final q = n.indexOf(t);
-      if (q >= 0 && (p < 0 || q < p)) p = q;
-    }
-    final c = p >= 0 && p < map.length ? map[p] : 0;
-    var start = math.max(0, c - 250);
-    var end = math.min(cleaned.length, start + size);
-    if (start > 0) {
-      final sp = cleaned.indexOf(' ', start);
-      if (sp >= 0 && sp < start + 40) start = sp + 1;
-    }
-    if (end < cleaned.length) {
-      final sp = cleaned.lastIndexOf(' ', end);
-      if (sp > start + size ~/ 2) end = sp;
-    }
-    return '${start > 0 ? '…' : ''}${cleaned.substring(start, end).trim()}'
-        '${end < cleaned.length ? '…' : ''}';
+    return scored.take(limit).map((e) => e.key).toList();
   }
 
   Future<PageData> page(int bookId, int pg) async {
     if (pg < 1) return PageData('', '');
-    final d = await _pageData(bookId, pg - 1);
+    final d = await pageData(bookId, pg - 1);
     if (d[2].isEmpty) return PageData('', '');
     final label = d[1].isEmpty
         ? ''
@@ -1069,7 +1537,8 @@ const Set<String> kStopWords = {
   'لي', 'لنا', 'ذلك', 'هذا', 'هذه', 'مع', 'كان', 'كيف', 'لماذا', 'متى',
   'أين', 'اين', 'بارك', 'فيكم', 'فيك', 'جزاكم', 'جزاك', 'خيرا', 'خيرًا',
   'سؤال', 'سؤالي', 'عندي', 'أسأل', 'اسأل', 'بخصوص', 'وما', 'وهل', 'شرعا',
-  'شرعًا', 'الشرع', 'الإسلام', 'الاسلام',
+  'شرعًا', 'الشرع', 'الإسلام', 'الاسلام', 'الله', 'تعالى', 'هناك', 'التي',
+  'الذي', 'بعض', 'كل', 'قد', 'لا', 'لم', 'لن', 'أم', 'ام', 'اذا', 'إذا',
 };
 
 ParsedQuestion parseQuestion(String raw) {
@@ -1093,21 +1562,85 @@ ParsedQuestion parseQuestion(String raw) {
 }
 
 class AnswerEngine {
-  Future<List<Quote>> _search(String query, List<String> terms) async {
-    final cached = app.cached(query);
+  Future<List<Quote>> _search(List<String> terms) async {
+    final key = 'v3:${app.order}:${terms.join(' ')}';
+    final cached = app.cached(key);
     if (cached != null) return cached;
+    final g = groupsOf(terms);
+    if (g.isEmpty) return <Quote>[];
     List<Quote> found;
     if (kIsWeb) {
-      found = await localIndex.searchAll(terms);
+      found = await localIndex.searchAll(g);
     } else {
       try {
-        found = await api.searchAll(query, terms);
+        found = await _online(terms, g, null);
       } on ApiException {
-        found = await localIndex.searchAll(terms);
+        found = await localIndex.searchAll(g);
       }
     }
-    if (found.isNotEmpty) app.putCache(query, found);
+    found = rankQuotes(found, g).take(10).toList();
+    if (found.isNotEmpty) app.putCache(key, found);
     return found;
+  }
+
+  /// بحث عبر «تراث» في كل كتب الشيخ، ثم جلب نص المسألة كاملًا لأفضل النتائج.
+  Future<List<Quote>> _online(List<String> terms, TermGroups g, int? book) async {
+    final queries = <String>[terms.join(' ')];
+    for (var i = 0; i < terms.length && queries.length < 3; i++) {
+      final syn = synonymsOf(terms[i]);
+      if (syn.isEmpty) continue;
+      queries.add(([...terms]..[i] = syn.first).join(' '));
+    }
+    final all = <Quote>[];
+    final seen = <String>{};
+    ApiException? err;
+    var ok = false;
+    for (final q in queries) {
+      try {
+        for (final x in await api.searchAuthor(q, book: book)) {
+          if (seen.add('${x.bookId}:${x.pageId}')) all.add(x);
+        }
+        ok = true;
+      } on ApiException catch (e) {
+        err = e;
+      }
+    }
+    if (!ok) throw err ?? ApiException('failed');
+    final ranked = rankQuotes(all, g);
+    final top = ranked.take(book != null ? 20 : 10).toList();
+    final full = math.min(top.length, book != null ? 8 : 6);
+    final filled = await Future.wait(<Future<Quote>>[
+      for (var i = 0; i < full; i++) _fill(top[i], g),
+    ]);
+    return <Quote>[...filled, ...top.skip(full)];
+  }
+
+  Future<Quote> _fill(Quote q, TermGroups g) async {
+    if (q.pageId <= 0) return q;
+    try {
+      final d = await api.rawPage(q.bookId, q.pageId);
+      final ex = sectionExcerpt(d[2], g, title: q.title);
+      if (ex.text.length > q.text.length) {
+        return q.copyWith(
+            text: ex.text, title: q.title.isEmpty ? ex.title : q.title);
+      }
+    } catch (_) {}
+    return q;
+  }
+
+  /// بحث داخل كتاب واحد.
+  Future<List<Quote>> searchInBook(Book b, String raw) async {
+    final terms = parseQuestion(raw).terms;
+    final g = groupsOf(terms);
+    if (g.isEmpty) return <Quote>[];
+    if (!kIsWeb && !storeHas(b.id)) {
+      try {
+        return await _online(terms, g, b.id);
+      } on ApiException {
+        // نكمل بالبحث المحلي
+      }
+    }
+    return rankQuotes(await localIndex.searchAll(g, onlyBook: b.id), g);
   }
 
   Future<ChatMessage> answer(String raw) async {
@@ -1120,19 +1653,35 @@ class AnswerEngine {
         notice: 'تفضّل بكتابة سؤالك، مثل: ما حكم النمص؟',
       );
     }
-    var quotes = await _search(q.terms.join(' '), q.terms);
-    if (quotes.isEmpty && q.terms.length > 1) {
-      final sorted = [...q.terms]..sort((a, b) => b.length.compareTo(a.length));
-      quotes = await _search(sorted.first, [sorted.first]);
+    var terms = q.terms;
+    var note = '';
+    var quotes = await _search(terms);
+    if (quotes.isEmpty) {
+      // لعلّه خطأ إملائي: نجرّب بدائل قريبة
+      for (final v in typoVariants(terms).take(4)) {
+        final r = await _search(v);
+        if (r.isNotEmpty) {
+          note = 'لم أجد «${terms.join(' ')}»، فبحثتُ عن «${v.join(' ')}».';
+          quotes = r;
+          terms = v;
+          break;
+        }
+      }
+    }
+    if (quotes.isEmpty && terms.length > 1) {
+      final sorted = [...terms]..sort((a, b) => b.length.compareTo(a.length));
+      quotes = await _search([sorted.first]);
+      if (quotes.isNotEmpty) terms = [sorted.first];
     }
     return ChatMessage(
       fromUser: false,
       text: greet,
       issue: q.issue,
+      terms: terms,
       quotes: quotes.map((x) => x.withIssue(q.issue)).toList(),
       notice: quotes.isEmpty
-          ? 'لم أجد للشيخ ابن عثيمين رَحِمَهُ الله كلامًا في هذه المسألة في الكتب المضافة حاليًا.'
-          : '',
+          ? 'لم أجد للشيخ ابن عثيمين رَحِمَهُ الله كلامًا في هذه المسألة في كتبه المضافة.'
+          : note,
     );
   }
 }
@@ -1149,6 +1698,11 @@ Future<void> main() async {
     await app.load();
   } catch (e, st) {
     debugPrint('app.load failed: $e\n$st');
+  }
+  try {
+    await storeInit();
+  } catch (e) {
+    debugPrint('storeInit failed: $e');
   }
   try {
     runApp(const SanadApp());
@@ -1862,6 +2416,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                 message: m,
                                 animate: i >= _animateFrom && _animateFrom >= 0,
                                 onReply: _replyTo,
+                                onAsk: _send,
                               );
                       },
                     ),
@@ -1904,6 +2459,16 @@ class _HomeScreenState extends State<HomeScreen> {
         out.add(x);
       }
       if (out.length >= 4) break;
+    }
+    final heads = localIndex.headsNow;
+    if (heads != null && t.length >= 3 && out.length < 4) {
+      final needle = needleOf(t);
+      for (var i = 0; i < heads.norms.length && out.length < 4; i++) {
+        final title = heads.titles[i];
+        if (title.length <= 60 && heads.norms[i].contains(needle) && seen.add(title)) {
+          out.add(title);
+        }
+      }
     }
     if (out.isEmpty) return const SizedBox.shrink();
     return Container(
@@ -2030,6 +2595,7 @@ class _EmptyState extends StatelessWidget {
       children: [
         const _Hero(),
         const SizedBox(height: 20),
+        if (app.dailyCard)
         InkWell(
           borderRadius: BorderRadius.circular(16),
           onTap: () => onAsk(today),
@@ -2166,8 +2732,12 @@ class _BotAnswer extends StatelessWidget {
   final ChatMessage message;
   final bool animate;
   final void Function(String issue) onReply;
+  final void Function(String question) onAsk;
   const _BotAnswer(
-      {required this.message, required this.animate, required this.onReply});
+      {required this.message,
+      required this.animate,
+      required this.onReply,
+      required this.onAsk});
 
   @override
   Widget build(BuildContext context) {
@@ -2194,11 +2764,17 @@ class _BotAnswer extends StatelessWidget {
             child: Icon(Icons.reply),
           ),
         ),
-        child: QuoteCard(quote: q, intro: i == 0 ? kScholarIntro : kScholarAgain),
+        child: QuoteCard(
+            quote: q,
+            intro: i == 0 ? kScholarIntro : kScholarAgain,
+            terms: message.terms),
       ));
     }
     if (message.notice.isNotEmpty) {
       parts.add(_NoticeBox(text: message.notice));
+    }
+    if (message.terms.isNotEmpty && message.quotes.isNotEmpty) {
+      parts.add(_TermsBar(terms: message.terms, onAsk: onAsk));
     }
     return Padding(
       padding: const EdgeInsets.only(bottom: 14),
@@ -2235,7 +2811,12 @@ class _NoticeBox extends StatelessWidget {
 class QuoteCard extends StatelessWidget {
   final Quote quote;
   final String intro;
-  const QuoteCard({super.key, required this.quote, this.intro = kScholarIntro});
+  final List<String> terms;
+  const QuoteCard(
+      {super.key,
+      required this.quote,
+      this.intro = kScholarIntro,
+      this.terms = const <String>[]});
 
   Future<void> _copyMenu(BuildContext context) async {
     final choice = await showModalBottomSheet<String>(
@@ -2263,11 +2844,19 @@ class QuoteCard extends StatelessWidget {
             title: const Text('نسخ بدون تشكيل'),
             onTap: () => Navigator.pop(ctx, 'nt'),
           ),
+          if (quote.title.isNotEmpty)
+            ListTile(
+              leading: const Icon(Icons.quiz_outlined),
+              title: const Text('نسخ المسألة كاملة (العنوان والجواب)'),
+              onTap: () => Navigator.pop(ctx, 'full'),
+            ),
         ]),
       ),
     );
     if (choice == null) return;
-    final text = choice == 'tg'
+    final text = choice == 'full'
+        ? '${quote.title}\n\n${plainFormat(quote)}'
+        : choice == 'tg'
         ? telegramFormat(quote)
         : (choice == 'wa'
             ? whatsappFormat(quote)
@@ -2338,19 +2927,36 @@ class QuoteCard extends StatelessWidget {
                 child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          if (quote.issue.isNotEmpty)
+          if (quote.heading.isNotEmpty)
             Padding(
               padding: const EdgeInsets.only(bottom: 4),
-              child: Text(quote.issue,
+              child: Text(quote.heading,
                   style: TextStyle(
-                      color: scheme.primary, fontWeight: FontWeight.bold)),
+                      color: scheme.primary, fontWeight: FontWeight.bold, height: 1.6)),
             ),
-          Text(intro,
-              style: TextStyle(
-                  color: scheme.onSurfaceVariant, fontWeight: FontWeight.w600)),
+          Row(children: [
+            Expanded(
+              child: Text(intro,
+                  style: TextStyle(
+                      color: scheme.onSurfaceVariant, fontWeight: FontWeight.w600)),
+            ),
+            Tooltip(
+              message: 'النقل بنصّه من الكتاب، وليس تلخيصًا',
+              triggerMode: TooltipTriggerMode.tap,
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                Icon(Icons.verified_outlined, size: 15, color: scheme.primary),
+                const SizedBox(width: 3),
+                Text('بنصّه', style: TextStyle(fontSize: 11, color: scheme.primary)),
+              ]),
+            ),
+          ]),
           const SizedBox(height: 6),
-          SelectableText(
-            '«${quote.text}»',
+          SelectableText.rich(
+            TextSpan(children: [
+              const TextSpan(text: '«'),
+              ...highlightSpans(quote.text, terms),
+              const TextSpan(text: '»'),
+            ]),
             style: const TextStyle(fontFamily: 'Amiri', fontSize: 20, height: 2.0),
             contextMenuBuilder: (context, state) {
               final value = state.textEditingValue;
@@ -2386,7 +2992,8 @@ class QuoteCard extends StatelessWidget {
                 child: Align(
                   alignment: AlignmentDirectional.centerStart,
                   child: ActionChip(
-                    avatar: Icon(Icons.menu_book_outlined, size: 18, color: scheme.primary),
+                    avatar: Icon(Icons.menu_book_outlined,
+                        size: 18, color: catColor(bookOf(quote.bookId)?.cat ?? 0)),
                     label: Text(
                       '${quote.bookName} (صـ ${quote.pageLabel})',
                       overflow: TextOverflow.ellipsis,
@@ -2437,6 +3044,12 @@ class QuoteCard extends StatelessWidget {
                     },
                   );
                 },
+              ),
+              IconButton(
+                tooltip: 'مشاركة كصورة',
+                icon: const Icon(Icons.image_outlined, size: 20),
+                onPressed: () => Navigator.of(context).push(MaterialPageRoute<void>(
+                    builder: (_) => ShareCardScreen(quote: quote))),
               ),
               IconButton(
                 tooltip: 'فتح في تراث',
@@ -2583,373 +3196,6 @@ class _FadeInState extends State<FadeIn> {
 //  صفحة القراءة (مع التظليل بالأصفر)
 // ---------------------------------------------------------------------
 
-class ReaderScreen extends StatefulWidget {
-  final Quote quote;
-  final bool jumpToStart;
-  const ReaderScreen({super.key, required this.quote, this.jumpToStart = false});
-  @override
-  State<ReaderScreen> createState() => _ReaderScreenState();
-}
-
-class _ReaderScreenState extends State<ReaderScreen> {
-  late int _pg;
-  late String _label;
-  String _text = '';
-  bool _loading = true;
-  bool _failed = false;
-  double _size = 19;
-  bool _amiri = true;
-
-  @override
-  void initState() {
-    super.initState();
-    _pg = widget.quote.pageId;
-    _label = widget.quote.pageLabel;
-    if (widget.jumpToStart || widget.quote.text.isNotEmpty) {
-      _toStart();
-    } else {
-      _load();
-    }
-  }
-
-  /// يرجع من صفحة النص إلى أول المسألة (أقرب عنوان قبلها) ليرى القارئ السؤال.
-  Future<void> _toStart() async {
-    setState(() {
-      _loading = true;
-      _failed = false;
-    });
-    try {
-      var pg = widget.quote.pageId;
-      for (var i = 0; i < 12 && pg >= 1; i++) {
-        final d = await api.page(widget.quote.bookId, pg);
-        if (d.text.isEmpty) break;
-        if (d.hasTitle) break;
-        if (pg == 1) break;
-        pg--;
-      }
-      if (mounted) _pg = pg < 1 ? 1 : pg;
-    } catch (_) {
-      if (mounted) _pg = widget.quote.pageId;
-    }
-    if (mounted) _load();
-  }
-
-  Future<void> _load() async {
-    if (_pg <= 0) {
-      setState(() {
-        _loading = false;
-        _failed = true;
-      });
-      return;
-    }
-    setState(() {
-      _loading = true;
-      _failed = false;
-    });
-    try {
-      final p = await api.page(widget.quote.bookId, _pg);
-      if (!mounted) return;
-      setState(() {
-        _text = p.text;
-        if (p.label.isNotEmpty) _label = p.label;
-        _failed = p.text.isEmpty;
-        _loading = false;
-      });
-      if (!_failed) {
-        app.bumpRead();
-        app.setLastRead(widget.quote.bookId, widget.quote.bookName, _pg, _label);
-      }
-    } catch (_) {
-      if (!mounted) return;
-      setState(() {
-        _loading = false;
-        _failed = true;
-      });
-    }
-  }
-
-  void _go(int delta) {
-    final next = _pg + delta;
-    if (next < 1) return;
-    _pg = next;
-    _load();
-  }
-
-  /// يبحث عن موضع كلام الشيخ في الصفحة ليظلّله.
-  TextRange? _findHighlight() {
-    if (_pg != widget.quote.pageId) return null;
-    var q = widget.quote.text.replaceAll('…', '').trim();
-    if (q.length < 12) return null;
-    final full = _text.indexOf(q);
-    if (full >= 0) return TextRange(start: full, end: full + q.length);
-    // نجرّب قطعة من أول النص ثم من وسطه.
-    final probeLen = math.min(30, q.length);
-    final probes = <String>[
-      q.substring(0, probeLen),
-      q.substring(q.length ~/ 2 - probeLen ~/ 2, q.length ~/ 2 + probeLen ~/ 2),
-    ];
-    for (var i = 0; i < probes.length; i++) {
-      final at = _text.indexOf(probes[i]);
-      if (at >= 0) {
-        final start = i == 0 ? at : math.max(0, at - q.length ~/ 2);
-        final end = math.min(_text.length, start + q.length);
-        return TextRange(start: start, end: end);
-      }
-    }
-    return null;
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final q = widget.quote;
-    return Scaffold(
-      appBar: AppBar(
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(q.bookName,
-                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                overflow: TextOverflow.ellipsis),
-            Text('صـ $_label',
-                style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant)),
-          ],
-        ),
-        actions: [
-          IconButton(
-            tooltip: 'تبديل الخط',
-            icon: const Icon(Icons.font_download_outlined),
-            onPressed: () => setState(() => _amiri = !_amiri),
-          ),
-          IconButton(
-            tooltip: 'تصغير الخط',
-            icon: const Icon(Icons.text_decrease),
-            onPressed: () => setState(() => _size = math.max(14, _size - 2)),
-          ),
-          IconButton(
-            tooltip: 'تكبير الخط',
-            icon: const Icon(Icons.text_increase),
-            onPressed: () => setState(() => _size = math.min(32, _size + 2)),
-          ),
-          IconButton(
-            tooltip: 'فتح في تراث',
-            icon: const Icon(Icons.open_in_new),
-            onPressed: () => openLink(context,
-                _pg > 0 ? 'https://app.turath.io/book/${q.bookId}/$_pg' : q.turathUrl),
-          ),
-        ],
-      ),
-      body: GestureDetector(
-        behavior: HitTestBehavior.translucent,
-        onHorizontalDragEnd: (d) {
-          final v = d.primaryVelocity ?? 0;
-          if (v.abs() < 400 || _loading || _pg <= 0) return;
-          _go(v > 0 ? 1 : -1);
-        },
-        child: _loading
-            ? const Center(child: CircularProgressIndicator())
-            : (_failed ? _fallback(scheme) : _pageBody(scheme)),
-      ),
-      bottomNavigationBar: _pg > 0
-          ? SafeArea(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                child: Row(
-                  children: [
-                    IconButton.filledTonal(
-                      tooltip: 'الصفحة السابقة',
-                      onPressed: _loading ? null : () => _go(-1),
-                      icon: const Icon(Icons.chevron_right),
-                    ),
-                    Expanded(
-                      child: Center(
-                        child: Text('صـ $_label',
-                            style: TextStyle(color: scheme.onSurfaceVariant)),
-                      ),
-                    ),
-                    IconButton.filledTonal(
-                      tooltip: 'الصفحة التالية',
-                      onPressed: _loading ? null : () => _go(1),
-                      icon: const Icon(Icons.chevron_left),
-                    ),
-                  ],
-                ),
-              ),
-            )
-          : null,
-    );
-  }
-
-  Widget _pageBody(ColorScheme scheme) {
-    final style = TextStyle(
-        fontFamily: _amiri ? 'Amiri' : null,
-        fontSize: _size,
-        height: 1.95,
-        color: scheme.onSurface);
-    final r = _findHighlight();
-    final InlineSpan span;
-    if (r == null) {
-      span = TextSpan(text: _text, style: style);
-    } else {
-      span = TextSpan(style: style, children: [
-        TextSpan(text: _text.substring(0, r.start)),
-        TextSpan(
-          text: _text.substring(r.start, r.end),
-          style: const TextStyle(backgroundColor: kHighlight, color: Colors.black),
-        ),
-        TextSpan(text: _text.substring(r.end)),
-      ]);
-    }
-    return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(20, 16, 20, 28),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          if (widget.quote.pageId > 0 && _pg != widget.quote.pageId)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 12),
-              child: Align(
-                alignment: AlignmentDirectional.centerStart,
-                child: FilledButton.tonalIcon(
-                  icon: const Icon(Icons.format_quote, size: 18),
-                  label: const Text('اذهب إلى موضع النص المنقول'),
-                  onPressed: () {
-                    _pg = widget.quote.pageId;
-                    _load();
-                  },
-                ),
-              ),
-            ),
-          SelectableText.rich(TextSpan(children: [span])),
-        ],
-      ),
-    );
-  }
-
-  Widget _fallback(ColorScheme scheme) {
-    final q = widget.quote;
-    return ListView(
-      padding: const EdgeInsets.all(20),
-      children: [
-        const _NoticeBox(text: 'تعذّر تحميل الصفحة كاملة الآن. هذا هو النص المنقول، ويمكنك فتح الصفحة في «تراث».'),
-        const SizedBox(height: 16),
-        if (q.text.isNotEmpty)
-          Container(
-            padding: const EdgeInsets.all(14),
-            decoration: BoxDecoration(
-              color: kHighlight,
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: SelectableText('«${q.text}»',
-                style: TextStyle(fontSize: _size, height: 1.9, color: Colors.black)),
-          ),
-        const SizedBox(height: 16),
-        FilledButton.icon(
-          onPressed: () => openLink(context, q.turathUrl),
-          icon: const Icon(Icons.open_in_new),
-          label: const Text('فتح الصفحة في تراث'),
-        ),
-        const SizedBox(height: 8),
-        if (_pg > 0)
-          OutlinedButton.icon(
-            onPressed: _load,
-            icon: const Icon(Icons.refresh),
-            label: const Text('إعادة المحاولة'),
-          ),
-      ],
-    );
-  }
-}
-
-// ---------------------------------------------------------------------
-//  كتب الشيخ
-// ---------------------------------------------------------------------
-
-class LibraryScreen extends StatelessWidget {
-  const LibraryScreen({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('كتب الشيخ ابن عثيمين')),
-      body: ListView.separated(
-        padding: const EdgeInsets.all(12),
-        itemCount: kBooks.length,
-        separatorBuilder: (_, __) => const SizedBox(height: 8),
-        itemBuilder: (context, i) {
-          final b = kBooks[i];
-          return Card(
-            child: ListTile(
-              leading: const Icon(Icons.menu_book_outlined),
-              title: Text(b.title),
-              subtitle: const Text('ابدأ القراءة من أول الكتاب'),
-              trailing: const Icon(Icons.chevron_left),
-              onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(
-                builder: (_) => ReaderScreen(
-                  quote: Quote(
-                    bookId: b.id,
-                    bookName: b.title,
-                    vol: '',
-                    page: '1',
-                    pageId: 1,
-                    text: '',
-                  ),
-                ),
-              )),
-            ),
-          );
-        },
-      ),
-    );
-  }
-}
-
-// ---------------------------------------------------------------------
-//  المفضلة
-// ---------------------------------------------------------------------
-
-class FavoritesScreen extends StatelessWidget {
-  const FavoritesScreen({super.key});
-
-  Widget _list(List<Quote> items, String empty) {
-    if (items.isEmpty) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Text(empty, textAlign: TextAlign.center),
-        ),
-      );
-    }
-    return ListView(
-      padding: const EdgeInsets.all(12),
-      children: items.map((q) => QuoteCard(quote: q)).toList(),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return DefaultTabController(
-      length: 2,
-      child: Scaffold(
-        appBar: AppBar(
-          title: const Text('محفوظاتي'),
-          bottom: const TabBar(tabs: [
-            Tab(text: 'المفضلة'),
-            Tab(text: 'للقراءة لاحقًا'),
-          ]),
-        ),
-        body: ListenableBuilder(
-          listenable: app,
-          builder: (context, _) => TabBarView(children: [
-            _list(app.favorites, 'لم تحفظ شيئًا بعد.\nاضغط النجمة تحت أي نقل لحفظه هنا.'),
-            _list(app.later, 'لا شيء هنا.\nاضغط علامة الحفظ تحت أي نقل لتقرأه لاحقًا.'),
-          ]),
-        ),
-      ),
-    );
-  }
-}
-
 // ---------------------------------------------------------------------
 //  الإعدادات
 // ---------------------------------------------------------------------
@@ -3046,9 +3292,34 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ButtonSegment(value: 0.9, label: Text('صغير')),
                   ButtonSegment(value: 1.0, label: Text('متوسط')),
                   ButtonSegment(value: 1.2, label: Text('كبير')),
+                  ButtonSegment(value: 1.45, label: Text('أكبر')),
                 ],
                 selected: {app.fontScale},
                 onSelectionChanged: (s) => app.setFontScale(s.first),
+              ),
+            ),
+            const _SectionTitle('الصفحة الرئيسية والبحث'),
+            SwitchListTile(
+              secondary: const Icon(Icons.wb_sunny_outlined),
+              title: const Text('مسألة اليوم'),
+              subtitle: const Text('مسألة جديدة كل يوم في الصفحة الرئيسية'),
+              value: app.dailyCard,
+              onChanged: app.setDaily,
+            ),
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 8, 16, 4),
+              child: Text('ترتيب النتائج'),
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+              child: SegmentedButton<String>(
+                segments: const [
+                  ButtonSegment(value: 'fatwa', label: Text('الفتاوى أولًا')),
+                  ButtonSegment(value: 'sharh', label: Text('الشروح أولًا')),
+                  ButtonSegment(value: 'any', label: Text('الأنسب')),
+                ],
+                selected: {app.order},
+                onSelectionChanged: (s) => app.setOrder(s.first),
               ),
             ),
             const _SectionTitle('البيانات'),
@@ -3099,6 +3370,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
               onTap: () async {
                 await Clipboard.setData(ClipboardData(text: app.exportFavorites()));
                 if (context.mounted) showToast(context, 'تم نسخ المفضلة');
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.ios_share),
+              title: const Text('تصدير المفضلة ملفًا'),
+              subtitle: const Text('ملف تحفظه أو ترسله لنفسك'),
+              onTap: () async {
+                try {
+                  final bytes = Uint8List.fromList(utf8.encode(app.exportFavorites()));
+                  await Share.shareXFiles([
+                    XFile.fromData(bytes,
+                        mimeType: 'application/json', name: 'sanad-favorites.json'),
+                  ]);
+                } catch (_) {
+                  if (context.mounted) showToast(context, 'تعذّر تصدير الملف');
+                }
               },
             ),
             ListTile(
@@ -3167,11 +3454,35 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
               ),
             ),
+            ListTile(
+              leading: const Icon(Icons.share_outlined),
+              title: const Text('شارك سَنَد مع صديق'),
+              onTap: () async {
+                const msg = 'سَنَد: كلام الشيخ ابن عثيمين رَحِمَهُ الله بنصّه ومصدره من كتبه.\n$kSiteUrl';
+                try {
+                  await Share.share(msg);
+                } catch (_) {
+                  await Clipboard.setData(const ClipboardData(text: msg));
+                  if (context.mounted) showToast(context, 'تم نسخ الرسالة');
+                }
+              },
+            ),
             const _SectionTitle('عن التطبيق'),
             ListTile(
               leading: const Icon(Icons.auto_stories_outlined),
               title: const Text('قرأتَ هذا الشهر'),
               subtitle: Text('${app.monthReads} صفحة'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.local_fire_department_outlined),
+              title: const Text('أيام القراءة المتتالية'),
+              subtitle: Text('${app.streakNow} يوم'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.help_outline),
+              title: const Text('كيف أستخدم التطبيق؟'),
+              onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute<void>(builder: (_) => const HowToScreen())),
             ),
             ListTile(
               leading: const Icon(Icons.person_outline),
