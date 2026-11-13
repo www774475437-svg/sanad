@@ -1025,10 +1025,10 @@ const Map<String, List<String>> _kSynonymsRaw = {
   'الحاجبين': ['النمص', 'الحواجب'],
   'حاجبيها': ['النمص', 'الحواجب'],
   'النمص': ['النامصة', 'الحواجب'],
-  'التدخين': ['الدخان'],
-  'السجائر': ['الدخان', 'التدخين'],
+  'التدخين': ['شرب الدخان'],
+  'السجائر': ['التدخين', 'شرب الدخان'],
   'الدخان': ['التدخين'],
-  'الشيشة': ['الدخان'],
+  'الشيشة': ['التدخين', 'شرب الدخان'],
   'الأغاني': ['الغناء', 'المعازف'],
   'الموسيقى': ['المعازف', 'الغناء'],
   'الغناء': ['المعازف', 'الأغاني'],
@@ -1134,7 +1134,9 @@ bool _wordAt(String h, int s, int e) {
     n++;
   }
   if (j < h.length && _isLetter(h.codeUnitAt(j))) return false;
-  return n == 0 || _kSuf.contains(h.substring(e, j));
+  if (n == 0) return true;
+  if (e - s <= 3) return false; // الكلمات القصيرة تُطابق كما هي فقط
+  return _kSuf.contains(h.substring(e, j));
 }
 
 /// أول موضع للكلمة في النص ككلمة مستقلة (لا كجزء من كلمة أخرى)، أو -1.
@@ -1215,6 +1217,13 @@ List<List<String>> typoVariants(List<String> terms) {
     s = 0;
   }
   var e = raw.indexOf(tag, math.max(rawPos, s + 1));
+  // عنوان يتبعه عنوان فرعي مباشرة: نضمّ ما بعده حتى نصل إلى نص المسألة.
+  var guard = 0;
+  while (e >= 0 && guard < 5) {
+    if (cleanHtml(raw.substring(s, e)).trim().length > found.length + 30) break;
+    e = raw.indexOf(tag, e + 1);
+    guard++;
+  }
   if (e < 0) e = raw.length;
   final cleaned = cleanHtml(raw.substring(s, e)).trim();
   if (cleaned.length <= size) return (text: cleaned, title: found);
@@ -1238,6 +1247,18 @@ List<List<String>> typoVariants(List<String> terms) {
         '${end < cleaned.length ? '…' : ''}',
     title: found,
   );
+}
+
+/// أول الصفحة التالية إن كانت تكملةً للمسألة (لا تبدأ بعنوان جديد).
+String leadText(String raw, {int size = 1100}) {
+  if (raw.isEmpty) return '';
+  const tag = '<span data-type="title"';
+  final e = raw.indexOf(tag);
+  final lead = cleanHtml(e < 0 ? raw : raw.substring(0, e)).trim();
+  if (lead.length < 30) return '';
+  if (lead.length <= size) return lead;
+  final sp = lead.lastIndexOf(' ', size);
+  return '${lead.substring(0, sp > size ~/ 2 ? sp : size)}…';
 }
 
 /// يرتّب النقول: ما طابق عنوانُ مسألته السؤالَ أولًا.
@@ -1440,13 +1461,22 @@ class LocalIndex {
     final d = await pageData(b.id, pageIdx);
     final ex = sectionExcerpt(d[2], g, title: title);
     if (ex.text.isEmpty) return null;
+    var text = ex.text;
+    final head = title.isNotEmpty ? title : ex.title;
+    if (text.length < head.length + 40) {
+      // العنوان في آخر الصفحة: نكمل من الصفحة التالية.
+      try {
+        final more = leadText((await pageData(b.id, pageIdx + 1))[2]);
+        if (more.isNotEmpty) text = '$text\n$more';
+      } catch (_) {}
+    }
     return Quote(
       bookId: b.id,
       bookName: b.title,
       vol: d[0],
       page: d[1],
       pageId: pageIdx + 1,
-      text: ex.text,
+      text: text,
       title: title.isNotEmpty ? title : ex.title,
     );
   }
@@ -1601,7 +1631,7 @@ ParsedQuestion parseQuestion(String raw) {
 
 class AnswerEngine {
   Future<List<Quote>> _search(List<String> terms) async {
-    final key = 'v4:${app.order}:${terms.join(' ')}';
+    final key = 'v5:${app.order}:${terms.join(' ')}';
     final cached = app.cached(key);
     if (cached != null) return cached;
     final g = groupsOf(terms);
@@ -1658,9 +1688,16 @@ class AnswerEngine {
     try {
       final d = await api.rawPage(q.bookId, q.pageId);
       final ex = sectionExcerpt(d[2], g, title: q.title);
-      if (ex.text.length > q.text.length) {
-        return q.copyWith(
-            text: ex.text, title: q.title.isEmpty ? ex.title : q.title);
+      var text = ex.text;
+      final head = q.title.isNotEmpty ? q.title : ex.title;
+      if (text.isNotEmpty && text.length < head.length + 40) {
+        try {
+          final more = leadText((await api.rawPage(q.bookId, q.pageId + 1))[2]);
+          if (more.isNotEmpty) text = '$text\n$more';
+        } catch (_) {}
+      }
+      if (text.length > q.text.length) {
+        return q.copyWith(text: text, title: q.title.isEmpty ? ex.title : q.title);
       }
     } catch (_) {}
     return q;
