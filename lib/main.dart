@@ -913,6 +913,9 @@ class LocalIndex {
       }
     }
     if (books.isEmpty) throw ApiException('local: $lastError');
+    books.sort((x, y) => kBooks
+        .indexWhere((b) => b.id == x.book.id)
+        .compareTo(kBooks.indexWhere((b) => b.id == y.book.id)));
     final out = <Quote>[];
     for (final lb in books) {
       out.addAll(_searchBook(lb, nt, perBook));
