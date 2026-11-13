@@ -68,19 +68,20 @@ jobs:
           }
           GRADLE
 
-      - run: flutter build apk --release
+      - run: flutter build apk --release --split-per-abi --dart-define=BUILD=${{ github.run_number }}
 
       - uses: actions/upload-artifact@v4
         with:
           name: sanad-apk
-          path: build/app/outputs/flutter-apk/app-release.apk
+          path: build/app/outputs/flutter-apk/*.apk
 
       - name: Publish APK to Releases
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          cp build/app/outputs/flutter-apk/app-release.apk sanad.apk
-          gh release create "v1.0.${{ github.run_number }}" sanad.apk --title "سَنَد v1.0.${{ github.run_number }}" --notes "النسخة الأولى من تطبيق سند" --latest
+          cp build/app/outputs/flutter-apk/app-arm64-v8a-release.apk sanad.apk
+          cp build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk sanad-old.apk
+          gh release create "v1.0.${{ github.run_number }}" sanad.apk sanad-old.apk --title "سَنَد v1.0.${{ github.run_number }}" --notes "النسخة الأولى من تطبيق سند" --latest
 
   web:
     runs-on: ubuntu-latest
@@ -106,6 +107,11 @@ jobs:
           s = s.replace('<html>', '<html lang="ar" dir="rtl">', 1)
           import re
           s = re.sub(r'<title>[^<]*</title>', '<title>سَنَد</title>', s, count=1)
+          meta = ('<meta property="og:title" content="سَنَد">'
+                  '<meta property="og:description" content="كلام العلماء بنصّه ومصدره من كتبهم، دون فتوى من الذكاء الاصطناعي">'
+                  '<meta property="og:type" content="website">'
+                  '<meta name="theme-color" content="#0F5F57">')
+          s = s.replace('</head>', meta + '</head>', 1)
           open(p, 'w', encoding='utf-8').write(s)
           m = open('web/manifest.json', encoding='utf-8').read()
           m = re.sub(r'"name":\s*"[^"]*"', '"name": "سَنَد"', m, count=1)
@@ -119,7 +125,7 @@ jobs:
         run: |
           curl -s -D - -o /dev/null -H "Origin: https://www774475437-svg.github.io" "https://api.turath.io/search?q=%D8%A7%D9%84%D9%86%D9%85%D8%B5&ver=3" | head -20 || true
 
-      - run: flutter build web --release --base-href /sanad/
+      - run: flutter build web --release --base-href /sanad/ --dart-define=BUILD=${{ github.run_number }}
 
       - name: Deploy to GitHub Pages branch
         uses: JamesIves/github-pages-deploy-action@v4
