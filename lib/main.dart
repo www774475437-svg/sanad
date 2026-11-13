@@ -888,16 +888,31 @@ class LocalIndex {
     }
   }
 
+  /// الأصغر أولًا والأكبر (مجموع الفتاوى) آخرًا، واحدًا بعد واحد لتخفيف الذاكرة.
+  List<Book> get _ordered =>
+      [...kBooks.where((b) => b.id != 12293), ...kBooks.where((b) => b.id == 12293)];
+
   Future<void> preload() async {
-    try {
-      await Future.wait(kBooks.map(_load));
-    } catch (_) {}
+    for (final b in _ordered) {
+      try {
+        await _load(b);
+      } catch (_) {}
+    }
   }
 
   Future<List<Quote>> searchAll(List<String> terms, {int perBook = 3}) async {
     final nt = terms.map(normArabic).where((t) => t.isNotEmpty).toList();
     if (nt.isEmpty) return <Quote>[];
-    final books = await Future.wait(kBooks.map(_load));
+    final books = <LocalBook>[];
+    Object? lastError;
+    for (final b in _ordered) {
+      try {
+        books.add(await _load(b));
+      } catch (e) {
+        lastError = e;
+      }
+    }
+    if (books.isEmpty) throw ApiException('local: $lastError');
     final out = <Quote>[];
     for (final lb in books) {
       out.addAll(_searchBook(lb, nt, perBook));
