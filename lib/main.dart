@@ -828,27 +828,23 @@ String _normRaw(String raw, {List<int>? map, bool tags = true}) {
 
 String normArabic(String s) => _normRaw(s, tags: false);
 
-class LocalPage {
-  final String vol;
-  final String page;
-  final String raw;
-  final String norm;
-  const LocalPage(this.vol, this.page, this.raw, this.norm);
-}
-
 class LocalBook {
   final Book book;
-  final List<LocalPage> pages;
-  const LocalBook(this.book, this.pages);
+  final List<String> norms;
+  const LocalBook(this.book, this.norms);
 }
 
+/// بحث محلي: ملف نصي مبسّط لكل كتاب (سطر لكل صفحة) ثم تُجلب الصفحات الأصلية عند الحاجة.
 class LocalIndex {
+  static const int chunkSize = 20;
   final Map<int, Future<LocalBook>> _books = {};
+  final Map<String, Future<List<dynamic>>> _chunks = {};
   final ValueNotifier<String> status = ValueNotifier<String>('');
   int _done = 0;
 
-  Future<LocalBook> _load(Book b) =>
-      _books.putIfAbsent(b.id, () => _fetch(b));
+  String get _base => '${kSiteUrl}data/';
+
+  Future<LocalBook> _load(Book b) => _books.putIfAbsent(b.id, () => _fetch(b));
 
   Future<LocalBook> _fetch(Book b) async {
     if (status.value.isEmpty) {
@@ -856,27 +852,16 @@ class LocalIndex {
     }
     try {
       final r = await http
-          .get(Uri.https('files.turath.io', '/books-v3/${b.id}.json'))
+          .get(Uri.parse('${_base}n${b.id}.txt'))
           .timeout(const Duration(seconds: 180));
       if (r.statusCode != 200) throw ApiException('HTTP ${r.statusCode}');
-      final d = jsonDecode(utf8.decode(r.bodyBytes));
-      final list = d is Map ? d['pages'] : null;
-      if (list is! List) throw ApiException('bad book file');
-      final pages = <LocalPage>[];
-      for (var i = 0; i < list.length; i++) {
-        final p = list[i];
-        final raw = p is Map ? asStr(p['text']) : '';
-        var pg = p is Map ? asStr(p['page']) : '';
-        if (pg == 'None' || pg == 'null') pg = '';
-        pages.add(LocalPage(
-            p is Map ? asStr(p['vol']) : '', pg, raw, _normRaw(raw)));
-        if (i % 600 == 599) await Future<void>.delayed(Duration.zero);
-      }
+      final lines = utf8.decode(r.bodyBytes).split('\n');
+      if (lines.isNotEmpty && lines.last.isEmpty) lines.removeLast();
       _done++;
       status.value = _done >= kBooks.length
           ? ''
           : 'جارٍ تجهيز كتب الشيخ (أول مرة فقط)... $_done/${kBooks.length}';
-      return LocalBook(b, pages);
+      return LocalBook(b, lines);
     } on ApiException {
       _books.remove(b.id);
       status.value = '';
@@ -886,6 +871,38 @@ class LocalIndex {
       status.value = '';
       throw ApiException('local: $e');
     }
+  }
+
+  Future<List<dynamic>> _chunk(int bookId, int k) {
+    if (_chunks.length > 80) _chunks.clear();
+    final key = '$bookId:$k';
+    return _chunks.putIfAbsent(key, () async {
+      try {
+        final r = await http
+            .get(Uri.parse('${_base}p${bookId}_$k.json'))
+            .timeout(const Duration(seconds: 60));
+        if (r.statusCode != 200) throw ApiException('HTTP ${r.statusCode}');
+        final d = jsonDecode(utf8.decode(r.bodyBytes));
+        if (d is! List) throw ApiException('bad chunk');
+        return d;
+      } catch (e) {
+        _chunks.remove(key);
+        if (e is ApiException) rethrow;
+        throw ApiException('local: $e');
+      }
+    });
+  }
+
+  /// [vol, page, rawHtml] للصفحة ذات الرقم (من 0).
+  Future<List<String>> _pageData(int bookId, int i) async {
+    final ch = await _chunk(bookId, i ~/ chunkSize);
+    final j = i % chunkSize;
+    if (j >= ch.length) return ['', '', ''];
+    final e = ch[j];
+    if (e is! List || e.length < 3) return ['', '', ''];
+    var pg = '${e[1] ?? ''}';
+    if (pg == 'None' || pg == 'null') pg = '';
+    return ['${e[0] ?? ''}', pg, '${e[2] ?? ''}'];
   }
 
   /// الأصغر أولًا والأكبر (مجموع الفتاوى) آخرًا، واحدًا بعد واحد لتخفيف الذاكرة.
@@ -918,15 +935,15 @@ class LocalIndex {
         .compareTo(kBooks.indexWhere((b) => b.id == y.book.id)));
     final out = <Quote>[];
     for (final lb in books) {
-      out.addAll(_searchBook(lb, nt, perBook));
+      out.addAll(await _searchBook(lb, nt, perBook));
     }
     return out;
   }
 
-  List<Quote> _searchBook(LocalBook lb, List<String> nt, int limit) {
+  Future<List<Quote>> _searchBook(LocalBook lb, List<String> nt, int limit) async {
     final scored = <MapEntry<int, double>>[];
-    for (var i = 0; i < lb.pages.length; i++) {
-      final n = lb.pages[i].norm;
+    for (var i = 0; i < lb.norms.length; i++) {
+      final n = lb.norms[i];
       var ok = true;
       var occ = 0;
       var minP = 1 << 30;
@@ -954,15 +971,18 @@ class LocalIndex {
     scored.sort((a, b) => b.value.compareTo(a.value));
     final out = <Quote>[];
     for (final e in scored.take(limit)) {
-      final q = _extract(lb, e.key, nt);
-      if (q != null) out.add(q);
+      try {
+        final q = await _extract(lb, e.key, nt);
+        if (q != null) out.add(q);
+      } catch (_) {}
     }
     return out;
   }
 
-  Quote? _extract(LocalBook lb, int i, List<String> nt) {
-    final pg = lb.pages[i];
-    final raw = pg.raw;
+  Future<Quote?> _extract(LocalBook lb, int i, List<String> nt) async {
+    final d = await _pageData(lb.book.id, i);
+    final raw = d[2];
+    if (raw.isEmpty) return null;
     final map = <int>[];
     final n = _normRaw(raw, map: map);
     var p = -1;
@@ -981,8 +1001,8 @@ class LocalIndex {
     return Quote(
       bookId: lb.book.id,
       bookName: lb.book.title,
-      vol: pg.vol,
-      page: pg.page,
+      vol: d[0],
+      page: d[1],
       pageId: i + 1,
       text: text,
     );
@@ -1013,15 +1033,13 @@ class LocalIndex {
   }
 
   Future<PageData> page(int bookId, int pg) async {
-    final b = kBooks.firstWhere((x) => x.id == bookId,
-        orElse: () => throw ApiException('unknown book'));
-    final lb = await _load(b);
-    if (pg < 1 || pg > lb.pages.length) return PageData('', '');
-    final p = lb.pages[pg - 1];
-    final label = p.page.isEmpty
+    if (pg < 1) return PageData('', '');
+    final d = await _pageData(bookId, pg - 1);
+    if (d[2].isEmpty) return PageData('', '');
+    final label = d[1].isEmpty
         ? ''
-        : ((p.vol.isEmpty || p.vol == '0') ? p.page : '${p.vol}/${p.page}');
-    return PageData(cleanHtml(p.raw), label);
+        : ((d[0].isEmpty || d[0] == '0') ? d[1] : '${d[0]}/${d[1]}');
+    return PageData(cleanHtml(d[2]), label);
   }
 }
 
@@ -1401,7 +1419,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _send(q['q']);
     }
     if (kIsWeb) {
-      localIndex.preload();
+      Future<void>.delayed(const Duration(seconds: 3), localIndex.preload);
     } else {
       checkForUpdate(context);
     }

@@ -130,6 +130,8 @@ jobs:
                   '<meta property="og:type" content="website">'
                   '<meta name="theme-color" content="#0F5F57">')
           s = s.replace('</head>', meta + '</head>', 1)
+          ov = open('tools/boot_overlay.html', encoding='utf-8').read()
+          s = s.replace('<body>', '<body>' + ov, 1)
           open(p, 'w', encoding='utf-8').write(s)
           m = open('web/manifest.json', encoding='utf-8').read()
           m = re.sub(r'"name":\s*"[^"]*"', '"name": "سَنَد"', m, count=1)
@@ -161,7 +163,10 @@ jobs:
         run: |
           curl -s -D - -o /dev/null -H "Origin: https://www774475437-svg.github.io" "https://api.turath.io/search?q=%D8%A7%D9%84%D9%86%D9%85%D8%B5&ver=3" | head -20 || true
 
-      - run: flutter build web --release --base-href /sanad/ --dart-define=BUILD=${{ github.run_number }}
+      - name: Build search data
+        run: python3 tools/build_data.py web/data
+
+      - run: flutter build web --release --pwa-strategy=none --base-href /sanad/ --dart-define=BUILD=${{ github.run_number }}
 
       - name: Deploy to GitHub Pages branch
         uses: JamesIves/github-pages-deploy-action@v4
@@ -169,6 +174,7 @@ jobs:
           folder: build/web
           branch: gh-pages
           clean: true
+          single-commit: true
 
       - name: Try to enable Pages
         continue-on-error: true
