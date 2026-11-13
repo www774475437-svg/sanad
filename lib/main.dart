@@ -631,8 +631,12 @@ class ApiException implements Exception {
 class PageData {
   final String text;
   final String label;
-  PageData(this.text, this.label);
+  final bool hasTitle;
+  PageData(this.text, this.label, [this.hasTitle = false]);
 }
+
+bool _rawHasTitle(String raw) => raw.contains('data-type="title"') ||
+    raw.contains("data-type='title'") || raw.contains('data-type=title');
 
 class TurathApi {
   static const String host = 'api.turath.io';
@@ -755,13 +759,14 @@ class TurathApi {
     dynamic node = body;
     if (body is Map && body['data'] is Map) node = body['data'];
     final m = flatten(node);
-    final text = cleanHtml(asStr(m['text']));
+    final rawText = asStr(m['text']);
+    final text = cleanHtml(rawText);
     final vol = asStr(m['vol']).trim();
     final pageNo = asStr(m['page']).trim();
     final label = pageNo.isEmpty
         ? ''
         : ((vol.isEmpty || vol == '0') ? pageNo : '$vol/$pageNo');
-    return PageData(text, label);
+    return PageData(text, label, _rawHasTitle(rawText));
   }
 
   /// فحص الاتصال: يرجع وصفًا مختصرًا لنتيجة بحث تجريبي.
@@ -1039,7 +1044,7 @@ class LocalIndex {
     final label = d[1].isEmpty
         ? ''
         : ((d[0].isEmpty || d[0] == '0') ? d[1] : '${d[0]}/${d[1]}');
-    return PageData(cleanHtml(d[2]), label);
+    return PageData(cleanHtml(d[2]), label, _rawHasTitle(d[2]));
   }
 }
 
@@ -1423,6 +1428,7 @@ class _HomeScreenState extends State<HomeScreen> {
     if (b != null) {
       Navigator.of(context).push(MaterialPageRoute<void>(
         builder: (_) => ReaderScreen(
+          jumpToStart: true,
           quote: Quote(
             bookId: b,
             bookName: q['n'] ?? bookTitleOf(b),
@@ -2579,7 +2585,8 @@ class _FadeInState extends State<FadeIn> {
 
 class ReaderScreen extends StatefulWidget {
   final Quote quote;
-  const ReaderScreen({super.key, required this.quote});
+  final bool jumpToStart;
+  const ReaderScreen({super.key, required this.quote, this.jumpToStart = false});
   @override
   State<ReaderScreen> createState() => _ReaderScreenState();
 }
@@ -2598,7 +2605,33 @@ class _ReaderScreenState extends State<ReaderScreen> {
     super.initState();
     _pg = widget.quote.pageId;
     _label = widget.quote.pageLabel;
-    _load();
+    if (widget.jumpToStart || widget.quote.text.isNotEmpty) {
+      _toStart();
+    } else {
+      _load();
+    }
+  }
+
+  /// يرجع من صفحة النص إلى أول المسألة (أقرب عنوان قبلها) ليرى القارئ السؤال.
+  Future<void> _toStart() async {
+    setState(() {
+      _loading = true;
+      _failed = false;
+    });
+    try {
+      var pg = widget.quote.pageId;
+      for (var i = 0; i < 12 && pg >= 1; i++) {
+        final d = await api.page(widget.quote.bookId, pg);
+        if (d.text.isEmpty) break;
+        if (d.hasTitle) break;
+        if (pg == 1) break;
+        pg--;
+      }
+      if (mounted) _pg = pg < 1 ? 1 : pg;
+    } catch (_) {
+      if (mounted) _pg = widget.quote.pageId;
+    }
+    if (mounted) _load();
   }
 
   Future<void> _load() async {
@@ -2769,7 +2802,27 @@ class _ReaderScreenState extends State<ReaderScreen> {
     }
     return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(20, 16, 20, 28),
-      child: SelectableText.rich(TextSpan(children: [span])),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (widget.quote.pageId > 0 && _pg != widget.quote.pageId)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: Align(
+                alignment: AlignmentDirectional.centerStart,
+                child: FilledButton.tonalIcon(
+                  icon: const Icon(Icons.format_quote, size: 18),
+                  label: const Text('اذهب إلى موضع النص المنقول'),
+                  onPressed: () {
+                    _pg = widget.quote.pageId;
+                    _load();
+                  },
+                ),
+              ),
+            ),
+          SelectableText.rich(TextSpan(children: [span])),
+        ],
+      ),
     );
   }
 
