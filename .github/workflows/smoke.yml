@@ -1,0 +1,17 @@
+name: smoke
+on:
+  workflow_dispatch:
+    inputs:
+      shots:
+        description: 'name~query~seconds|...'
+        required: false
+        default: 'home~~25'
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: npm i puppeteer-core@23 --no-save --silent
+      - run: node tools/smoke.js
+        env:
+          SHOTS: ${{ github.event.inputs.shots }}
