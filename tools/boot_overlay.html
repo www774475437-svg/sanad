@@ -7,12 +7,28 @@
 (function () {
   function remove() { var b = document.getElementById('sanad-boot'); if (b) b.remove(); }
   function showBtn(msg) {
-    var m = document.getElementById('sanad-msg'); if (m) m.textContent = msg;
+    var m = document.getElementById('sanad-msg'); if (m) m.textContent = msg; m.style.cssText += ';white-space:pre-wrap;direction:ltr;font-size:12px;max-width:100%;word-break:break-all';
     var b = document.getElementById('sanad-btn'); if (b) b.style.display = 'inline-block';
   }
   window.addEventListener('flutter-first-frame', remove);
-  window.addEventListener('error', function (e) { showBtn('حدث خطأ أثناء التحميل: ' + (e && e.message ? e.message : '')); });
-  window.addEventListener('unhandledrejection', function (e) { showBtn('حدث خطأ أثناء التحميل'); });
+  var logs = [];
+  function note(x) { logs.push(String(x).slice(0, 160)); if (logs.length > 4) logs.shift(); }
+  ['error', 'warn'].forEach(function (k) {
+    var o = console[k];
+    console[k] = function () {
+      try { note(Array.prototype.slice.call(arguments).join(' ')); } catch (e) {}
+      return o.apply(console, arguments);
+    };
+  });
+  function detail() { return '\n' + logs.join('\n'); }
+  window.addEventListener('error', function (e) {
+    var t = (e && e.target && e.target.src) ? ' [' + e.target.src + ']' : '';
+    var m = (e && e.message ? e.message : '') + (e && e.filename ? ' @' + e.filename + ':' + e.lineno : '') + t;
+    showBtn('حدث خطأ أثناء التحميل: ' + m + detail());
+  });
+  window.addEventListener('unhandledrejection', function (e) {
+    showBtn('حدث خطأ أثناء التحميل: ' + (e && e.reason ? (e.reason.stack || e.reason) : '') + detail());
+  });
   var t0 = Date.now();
   var poll = setInterval(function () {
     var up = document.querySelector('flutter-view, flt-glass-pane');
