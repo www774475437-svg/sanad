@@ -1,6 +1,7 @@
 <div id="sanad-boot" style="position:fixed;top:0;left:0;right:0;bottom:0;display:flex;flex-direction:column;align-items:center;justify-content:center;background:#0B4A44;color:#fff;font-family:sans-serif;z-index:99999;text-align:center;padding:24px;direction:rtl">
   <div style="font-size:46px;font-weight:bold">سَنَد</div>
   <div id="sanad-msg" style="margin-top:14px;font-size:16px">جارٍ التحميل…</div>
+  <a id="sanad-apk" href="https://github.com/www774475437-svg/sanad/releases/latest/download/sanad.apk" style="display:none;margin-top:12px;color:#fff;font-size:15px;text-decoration:underline">أو حمّل تطبيق الأندرويد مباشرة</a>
   <button id="sanad-btn" style="display:none;margin-top:18px;padding:12px 20px;border-radius:14px;border:0;font-size:16px">إعادة التحميل ومسح الذاكرة المؤقتة</button>
 </div>
 <script>
@@ -8,7 +9,7 @@
   function remove() { var b = document.getElementById('sanad-boot'); if (b) b.remove(); }
   function showBtn(msg) {
     var m = document.getElementById('sanad-msg'); if (m) m.textContent = msg; m.style.cssText += ';white-space:pre-wrap;direction:ltr;font-size:12px;max-width:100%;word-break:break-all';
-    var b = document.getElementById('sanad-btn'); if (b) b.style.display = 'inline-block';
+    var b = document.getElementById('sanad-btn'); if (b) b.style.display = 'inline-block'; var a = document.getElementById('sanad-apk'); if (a) a.style.display = 'inline-block';
   }
   window.addEventListener('flutter-first-frame', remove);
   var logs = [];
