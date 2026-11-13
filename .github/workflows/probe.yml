@@ -1,0 +1,38 @@
+name: probe-turath
+on:
+  push:
+    paths: ['probe/**']
+  workflow_dispatch:
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Probe turath API
+        run: |
+          set +e
+          O="Origin: https://www774475437-svg.github.io"
+          echo "=== search headers"; curl -s -D - -o /tmp/s.json -H "$O" "https://api.turath.io/search?q=%D8%A7%D9%84%D9%86%D9%85%D8%B5&ver=3&book=12293" | grep -iE "HTTP|access-control|content-type"
+          echo "=== search body"; head -c 2500 /tmp/s.json; echo
+          echo "=== book endpoints"
+          for u in "book?id=11224" "book?book_id=11224" "book?id=11224&ver=3&include=indexes"; do echo "--- $u"; curl -s -H "$O" "https://api.turath.io/$u" | head -c 700; echo; done
+          echo "=== page"; curl -s -H "$O" "https://api.turath.io/page?book_id=11224&pg=5&ver=3" | head -c 1200; echo
+          echo "=== files headers"; curl -s -D - -o /tmp/b.json -H "$O" "https://files.turath.io/books-v3/11224.json" | grep -iE "HTTP|access-control|content-type|content-length"
+          ls -la /tmp/b.json
+          python3 - <<'PY'
+          import json
+          try:
+              d=json.load(open('/tmp/b.json'))
+              def show(x,depth=0,key=''):
+                  pad='  '*depth
+                  if isinstance(x,dict):
+                      print(pad+key+' dict keys:',list(x.keys())[:15])
+                      if depth<2:
+                          for k,v in list(x.items())[:6]: show(v,depth+1,str(k))
+                  elif isinstance(x,list):
+                      print(pad+key+' list len',len(x))
+                      if x and depth<3: show(x[0],depth+1,'[0]')
+                  else:
+                      print(pad+key+' =',str(x)[:200].replace('\n',' '))
+              show(d)
+          except Exception as e: print('ERR',e)
+          PY
