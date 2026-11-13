@@ -1140,8 +1140,26 @@ final AnswerEngine engine = AnswerEngine();
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await app.load();
-  runApp(const SanadApp());
+  try {
+    await app.load();
+  } catch (e, st) {
+    debugPrint('app.load failed: $e\n$st');
+  }
+  try {
+    runApp(const SanadApp());
+  } catch (e, st) {
+    runApp(MaterialApp(
+      home: Scaffold(
+        body: SafeArea(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(16),
+            child: SelectableText('خطأ: $e\n\n$st',
+                textDirection: TextDirection.ltr),
+          ),
+        ),
+      ),
+    ));
+  }
 }
 
 ThemeData buildTheme(Brightness b, String pal) {
