@@ -33,7 +33,7 @@ def norm(raw: str) -> str:
 
 def fetch(book_id: int):
     url = f"https://files.turath.io/books-v3/{book_id}.json"
-    req = urllib.request.Request(url, headers={"Accept-Encoding": "gzip"})
+    req = urllib.request.Request(url, headers={"Accept-Encoding": "gzip", "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120 Safari/537.36", "Accept": "application/json,*/*"})
     with urllib.request.urlopen(req, timeout=300) as r:
         data = r.read()
         if r.headers.get("Content-Encoding") == "gzip":
