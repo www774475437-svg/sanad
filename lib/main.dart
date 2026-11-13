@@ -1109,9 +1109,47 @@ TermGroups groupsOf(List<String> terms) {
   return out;
 }
 
+final Set<int> _kPre = 'والفبكليتمنس'.codeUnits.toSet();
+const Set<String> _kSuf = {
+  'ه', 'ها', 'هم', 'هن', 'هما', 'ك', 'كم', 'ي', 'نا', 'ا', 'ات', 'ان', 'ين',
+  'ون', 'يه', 'يها', 'ته', 'تها', 'تهم', 'ت', 'تي', 'تين', 'تان', 'يون', 'وا',
+  'يا', 'يات',
+};
+
+bool _isLetter(int c) => c >= 0x0621 && c <= 0x064A;
+
+/// هل الموضع [s..e) كلمة مستقلة؟ (تُقبل سوابق مثل «ال» و«و» ولواحق مثل «ها» و«ات»)
+bool _wordAt(String h, int s, int e) {
+  var i = s - 1;
+  var n = 0;
+  while (i >= 0 && n < 4 && _kPre.contains(h.codeUnitAt(i))) {
+    i--;
+    n++;
+  }
+  if (i >= 0 && _isLetter(h.codeUnitAt(i))) return false;
+  var j = e;
+  n = 0;
+  while (j < h.length && n < 3 && _isLetter(h.codeUnitAt(j))) {
+    j++;
+    n++;
+  }
+  if (j < h.length && _isLetter(h.codeUnitAt(j))) return false;
+  return n == 0 || _kSuf.contains(h.substring(e, j));
+}
+
+/// أول موضع للكلمة في النص ككلمة مستقلة (لا كجزء من كلمة أخرى)، أو -1.
+int wordPos(String hay, String needle, [int from = 0]) {
+  var p = hay.indexOf(needle, from);
+  while (p >= 0) {
+    if (_wordAt(hay, p, p + needle.length)) return p;
+    p = hay.indexOf(needle, p + 1);
+  }
+  return -1;
+}
+
 bool hasAny(String hay, List<String> alts) {
   for (final a in alts) {
-    if (hay.contains(a)) return true;
+    if (wordPos(hay, a) >= 0) return true;
   }
   return false;
 }
@@ -1127,7 +1165,7 @@ int firstPos(String hay, TermGroups g) {
   var p = -1;
   for (final alts in g) {
     for (final a in alts) {
-      final q = hay.indexOf(a);
+      final q = wordPos(hay, a);
       if (q >= 0 && (p < 0 || q < p)) p = q;
     }
   }
@@ -1477,7 +1515,7 @@ class LocalIndex {
         var p = -1;
         var t = '';
         for (final a in alts) {
-          final q = n.indexOf(a);
+          final q = wordPos(n, a);
           if (q >= 0 && (p < 0 || q < p)) {
             p = q;
             t = a;
@@ -1490,10 +1528,10 @@ class LocalIndex {
         minP = math.min(minP, p);
         maxP = math.max(maxP, p);
         var c = 1;
-        var q = n.indexOf(t, p + t.length);
+        var q = wordPos(n, t, p + t.length);
         while (q >= 0 && c < 6) {
           c++;
-          q = n.indexOf(t, q + t.length);
+          q = wordPos(n, t, q + t.length);
         }
         occ += c;
       }
@@ -1563,7 +1601,7 @@ ParsedQuestion parseQuestion(String raw) {
 
 class AnswerEngine {
   Future<List<Quote>> _search(List<String> terms) async {
-    final key = 'v3:${app.order}:${terms.join(' ')}';
+    final key = 'v4:${app.order}:${terms.join(' ')}';
     final cached = app.cached(key);
     if (cached != null) return cached;
     final g = groupsOf(terms);
