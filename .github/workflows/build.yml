@@ -168,6 +168,9 @@ jobs:
 
       - run: flutter build web --release --pwa-strategy=none --base-href /sanad/ --dart-define=BUILD=${{ github.run_number }}
 
+      - name: Kill old service worker
+        run: cp tools/kill_sw.js build/web/flutter_service_worker.js
+
       - name: Deploy to GitHub Pages branch
         uses: JamesIves/github-pages-deploy-action@v4
         with:
