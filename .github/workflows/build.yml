@@ -8,6 +8,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -72,3 +74,10 @@ jobs:
         with:
           name: sanad-apk
           path: build/app/outputs/flutter-apk/app-release.apk
+
+      - name: Publish APK to Releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp build/app/outputs/flutter-apk/app-release.apk sanad.apk
+          gh release create "v1.0.${{ github.run_number }}" sanad.apk --title "سَنَد v1.0.${{ github.run_number }}" --notes "النسخة الأولى من تطبيق سند" --latest
