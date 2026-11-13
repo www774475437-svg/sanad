@@ -1979,7 +1979,20 @@ class _HomeScreenState extends State<HomeScreen> {
     if (!mounted) return;
     final q = Uri.base.queryParameters;
     final b = int.tryParse(q['b'] ?? '');
-    if (b != null) {
+    final view = q['v'] ?? '';
+    final vb = bookOf(b ?? 0);
+    if (view == 'lib') {
+      Navigator.of(context).push(
+          MaterialPageRoute<void>(builder: (_) => const LibraryScreen()));
+    } else if (view == 'book' && vb != null) {
+      Navigator.of(context)
+          .push(MaterialPageRoute<void>(builder: (_) => BookScreen(book: vb)));
+    } else if (view == 'toc' && vb != null) {
+      Navigator.of(context)
+          .push(MaterialPageRoute<void>(builder: (_) => TocScreen(book: vb)));
+    } else if (view == 'card' && vb != null) {
+      _openCard(vb, int.tryParse(q['p'] ?? '') ?? 1);
+    } else if (b != null) {
       Navigator.of(context).push(MaterialPageRoute<void>(
         builder: (_) => ReaderScreen(
           jumpToStart: true,
@@ -2001,6 +2014,15 @@ class _HomeScreenState extends State<HomeScreen> {
     } else {
       checkForUpdate(context);
     }
+  }
+
+  Future<void> _openCard(Book b, int pg) async {
+    try {
+      final quote = await localIndex.quoteAt(b, pg - 1, const <List<String>>[]);
+      if (quote == null || !mounted) return;
+      Navigator.of(context).push(MaterialPageRoute<void>(
+          builder: (_) => ShareCardScreen(quote: quote)));
+    } catch (_) {}
   }
 
   @override

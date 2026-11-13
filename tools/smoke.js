@@ -9,7 +9,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     args: ['--no-sandbox', '--enable-unsafe-swiftshader', '--use-gl=swiftshader'],
   });
   for (const spec of shots) {
-    const [name, query, waitS] = spec.split('~');
+    const [name, query, waitS, wheel] = spec.split('~');
     const page = await browser.newPage();
     await page.setViewport({ width: 390, height: 844, deviceScaleFactor: 1 });
     page.on('console', (m) => { if (['error', 'warning'].includes(m.type())) console.log('CONSOLE', name, m.type(), m.text().slice(0, 500)); });
@@ -20,6 +20,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     console.log('OPEN', name, url);
     await page.goto(url, { waitUntil: 'load', timeout: 120000 });
     await sleep(1000 * Number(waitS || 30));
+    if (wheel) { await page.mouse.move(195, 400); await page.mouse.wheel({ deltaY: Number(wheel) }); await sleep(1500); }
     const boot = await page.evaluate(() => { const b = document.getElementById('sanad-boot'); return b ? b.innerText : 'GONE'; });
     console.log('BOOT', name, JSON.stringify(boot));
     const buf = await page.screenshot({ type: 'jpeg', quality: 55 });
