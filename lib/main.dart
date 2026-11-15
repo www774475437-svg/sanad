@@ -2780,13 +2780,13 @@ class _EmptyState extends StatelessWidget {
           Expanded(
               child: _ToolCard(
                   icon: Icons.local_library_outlined,
-                  label: 'كتب الشيخ',
+                  label: 'الكتب',
                   onTap: () => go(const LibraryScreen()))),
           const SizedBox(width: 8),
           Expanded(
               child: _ToolCard(
                   icon: Icons.format_list_bulleted,
-                  label: 'فهرس الفتاوى',
+                  label: 'الفهرس',
                   onTap: () {
                     if (majmu != null) go(TocScreen(book: majmu));
                   })),
@@ -2794,13 +2794,13 @@ class _EmptyState extends StatelessWidget {
           Expanded(
               child: _ToolCard(
                   icon: Icons.star_outline,
-                  label: 'محفوظاتي',
+                  label: 'المحفوظات',
                   onTap: () => go(const FavoritesScreen()))),
           const SizedBox(width: 8),
           Expanded(
               child: _ToolCard(
                   icon: Icons.casino_outlined,
-                  label: 'مسألة عشوائية',
+                  label: 'عشوائية',
                   onTap: () =>
                       onAsk(kTopics[math.Random().nextInt(kTopics.length)]))),
         ]),
