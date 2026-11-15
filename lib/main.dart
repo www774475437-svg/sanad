@@ -27,6 +27,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'norm.dart';
 import 'store_stub.dart' if (dart.library.io) 'store_io.dart';
 
+part 'ai.dart';
 part 'books.dart';
 part 'extras.dart';
 
@@ -35,7 +36,7 @@ part 'extras.dart';
 // ---------------------------------------------------------------------
 
 const String kAppName = 'سَنَد';
-const String kVersion = '1.3.0';
+const String kVersion = '1.4.0';
 const int kAuthorId = 57;
 const int kBuild = int.fromEnvironment('BUILD', defaultValue: 0);
 const String kSiteUrl = 'https://www774475437-svg.github.io/sanad/';
@@ -129,6 +130,7 @@ class Quote {
   final String text;
   final String issue;
   final String title; // عنوان المسألة في الكتاب (إن عُرف)
+  final String author; // اسم المؤلف إن لم يكن من كتب الشيخ
 
   const Quote({
     required this.bookId,
@@ -139,7 +141,13 @@ class Quote {
     required this.text,
     this.issue = '',
     this.title = '',
+    this.author = '',
   });
+
+  /// سطر التقديم قبل النقل.
+  String introLine(bool first) => author.isNotEmpty
+      ? 'قال $author:'
+      : (first ? kScholarIntro : kScholarAgain);
 
   /// العنوان الذي يُعرض فوق النقل.
   String get heading => title.isNotEmpty ? title : issue;
@@ -153,6 +161,7 @@ class Quote {
         text: text ?? this.text,
         issue: issue,
         title: title ?? this.title,
+        author: author,
       );
 
   String get pageLabel {
@@ -181,6 +190,7 @@ class Quote {
         text: text,
         issue: newIssue,
         title: title,
+        author: author,
       );
 
   Map<String, dynamic> toJson() => {
@@ -192,6 +202,7 @@ class Quote {
         't': text,
         'i': issue,
         if (title.isNotEmpty) 'h': title,
+        if (author.isNotEmpty) 'a': author,
       };
 
   factory Quote.fromJson(Map<String, dynamic> j) => Quote(
@@ -203,6 +214,7 @@ class Quote {
         text: asStr(j['t']),
         issue: asStr(j['i']),
         title: asStr(j['h']),
+        author: asStr(j['a']),
       );
 }
 
@@ -213,6 +225,7 @@ class ChatMessage {
   final String notice; // مثل: لم أجد للشيخ كلامًا
   final String issue;
   final List<String> terms; // كلمات البحث التي استُعملت
+  final String summary; // خلاصة آلية (إن فُعّل الذكاء الاصطناعي)
 
   ChatMessage({
     required this.fromUser,
@@ -220,6 +233,7 @@ class ChatMessage {
     List<Quote>? quotes,
     this.notice = '',
     this.issue = '',
+    this.summary = '',
     List<String>? terms,
   })  : quotes = quotes ?? <Quote>[],
         terms = terms ?? const <String>[];
@@ -231,6 +245,7 @@ class ChatMessage {
         'n': notice,
         'i': issue,
         if (terms.isNotEmpty) 'k': terms,
+        if (summary.isNotEmpty) 's': summary,
       };
 
   factory ChatMessage.fromJson(Map<String, dynamic> j) => ChatMessage(
@@ -239,6 +254,7 @@ class ChatMessage {
         quotes: asMapList(j['q']).map((m) => Quote.fromJson(m)).toList(),
         notice: asStr(j['n']),
         issue: asStr(j['i']),
+        summary: asStr(j['s']),
         terms: j['k'] is List
             ? (j['k'] as List).map((e) => '$e').toList()
             : const <String>[],
@@ -416,16 +432,16 @@ Future<void> checkForUpdate(BuildContext context, {bool manual = false}) async {
 
 String telegramFormat(Quote q) =>
     '📜 ${q.heading.isEmpty ? 'من كلام الشيخ ابن عثيمين' : q.heading}\n\n'
-    '▪️ $kScholarIntro\n'
+    '▪️ ${q.introLine(true)}\n'
     '«${q.text}،.🌿»\n\n'
     '> [📓${q.bookName} (صـ ${q.pageLabel})]';
 
-String whatsappFormat(Quote q) => '▪ $kScholarIntro\n\n'
+String whatsappFormat(Quote q) => '▪ ${q.introLine(true)}\n\n'
     '«${q.text}،.🪶»\n\n'
     '[📓${q.bookName} (${q.pageLabel})]';
 
 String plainFormat(Quote q) =>
-    '$kScholarIntro\n«${q.text}»\n[📓${q.bookName} (صـ ${q.pageLabel})]';
+    '${q.introLine(true)}\n«${q.text}»\n[📓${q.bookName} (صـ ${q.pageLabel})]';
 
 // ---------------------------------------------------------------------
 //  حالة التطبيق والحفظ في الهاتف
@@ -444,6 +460,8 @@ class AppState extends ChangeNotifier {
   Map<String, String> notes = <String, String>{};
   List<Quote> later = <Quote>[];
   bool dailyCard = true;
+  bool aiOn = true;
+  String scope = 'sheikh';
   String order = 'fatwa';
   Map<String, dynamic> bookPos = <String, dynamic>{};
   List<Map<String, dynamic>> marks = <Map<String, dynamic>>[];
@@ -468,6 +486,8 @@ class AppState extends ChangeNotifier {
     palette = p.getString('palette') ?? 'green';
     later = _decode(p.getString('later')).map((m) => Quote.fromJson(m)).toList();
     dailyCard = p.getBool('dailyCard') ?? true;
+    aiOn = p.getBool('aiOn') ?? true;
+    scope = p.getString('scope') ?? 'sheikh';
     order = p.getString('order') ?? 'fatwa';
     marks = _decode(p.getString('marks'));
     folderNames = p.getStringList('folderNames') ?? <String>[];
@@ -598,6 +618,18 @@ class AppState extends ChangeNotifier {
       return streak;
     }
     return 0;
+  }
+
+  void setAi(bool v) {
+    aiOn = v;
+    _p?.setBool('aiOn', v);
+    notifyListeners();
+  }
+
+  void setScope(String v) {
+    scope = v;
+    _p?.setString('scope', v);
+    notifyListeners();
   }
 
   void setDaily(bool v) {
@@ -826,7 +858,9 @@ class TurathApi {
   final http.Client _client = http.Client();
 
   Future<dynamic> _get(String path, Map<String, String> query) async {
-    final uri = Uri.https(host, path, query);
+    final uri = (kIsWeb && proxyOn)
+        ? Uri.parse('$kProxyUrl/t$path').replace(queryParameters: query)
+        : Uri.https(host, path, query);
     final http.Response r;
     try {
       r = await _client
@@ -885,9 +919,10 @@ class TurathApi {
   /// يبحث في كل كتب الشيخ بطلب واحد (أو في كتاب واحد إن حُدِّد).
   Future<List<Quote>> searchAuthor(String query, {int? book}) async {
     final params = <String, String>{'q': query, 'ver': '3'};
+    final all = book == null && app.scope == 'all';
     if (book != null) {
       params['book'] = '$book';
-    } else {
+    } else if (!all) {
       params['author'] = '$kAuthorId';
     }
     final body = await _get('/search', params);
@@ -896,11 +931,12 @@ class TurathApi {
     final seen = <String>{};
     for (final it in _items(body)) {
       final m = flatten(it);
-      final b = bookOf(asInt(m['book_id']));
-      if (b == null) continue; // ليس من كتب الشيخ المعتمدة: يُترك
-      if (book != null && b.id != book) continue;
+      final bid = asInt(m['book_id']);
+      final b = bookOf(bid);
+      if (b == null && !all) continue; // ليس من كتب الشيخ المعتمدة: يُترك
+      if (bid <= 0 || (book != null && bid != book)) continue;
       final pageId = asInt(m['page_id'] ?? m['pg']);
-      if (!seen.add('${b.id}:$pageId')) continue;
+      if (!seen.add('$bid:$pageId')) continue;
       var text = cleanHtml(asStr(m['snip']));
       if (text.isEmpty) text = cleanHtml(asStr(m['text']));
       if (text.isEmpty) continue;
@@ -917,13 +953,14 @@ class TurathApi {
         }
       }
       out.add(Quote(
-        bookId: b.id,
-        bookName: b.title,
+        bookId: bid,
+        bookName: b?.title ?? asStr(m['book_name']),
         vol: asStr(m['vol']),
         page: asStr(m['page']),
         pageId: pageId,
         text: text,
         title: title,
+        author: b == null ? asStr(m['author_name']).trim() : '',
       ));
     }
     return out;
@@ -932,7 +969,7 @@ class TurathApi {
   /// [vol, page, rawHtml] للصفحة: من الهاتف إن كان الكتاب منزّلًا، وإلا من «تراث».
   Future<List<String>> rawPage(int bookId, int pg) async {
     if (pg < 1) return <String>['', '', ''];
-    if (kIsWeb || storeHas(bookId)) return localIndex.pageData(bookId, pg - 1);
+    if (webLocal || storeHas(bookId)) return localIndex.pageData(bookId, pg - 1);
     try {
       final body = await _get('/page', {
         'book_id': '$bookId',
@@ -963,7 +1000,7 @@ class TurathApi {
 
   /// فحص الاتصال: يرجع وصفًا مختصرًا لنتيجة بحث تجريبي.
   Future<String> diagnose() async {
-    if (kIsWeb) {
+    if (webLocal) {
       final lb = await localIndex.page(11224, 5);
       return 'نجح قراءة ملفات الكتب.\nمقتطف: ${lb.text.length > 120 ? lb.text.substring(0, 120) : lb.text}';
     }
@@ -1632,13 +1669,13 @@ ParsedQuestion parseQuestion(String raw) {
 
 class AnswerEngine {
   Future<List<Quote>> _search(List<String> terms) async {
-    final key = 'v6:${app.order}:${terms.join(' ')}';
+    final key = 'v7:${app.scope}:${app.order}:${terms.join(' ')}';
     final cached = app.cached(key);
     if (cached != null) return cached;
     final g = groupsOf(terms);
     if (g.isEmpty) return <Quote>[];
     List<Quote> found;
-    if (kIsWeb) {
+    if (webLocal) {
       found = await localIndex.searchAll(g);
     } else {
       try {
@@ -1709,7 +1746,7 @@ class AnswerEngine {
     final terms = parseQuestion(raw).terms;
     final g = groupsOf(terms);
     if (g.isEmpty) return <Quote>[];
-    if (!kIsWeb && !storeHas(b.id)) {
+    if (!webLocal && !storeHas(b.id)) {
       try {
         return await _online(terms, g, b.id);
       } on ApiException {
@@ -1730,8 +1767,20 @@ class AnswerEngine {
       );
     }
     var terms = q.terms;
+    var issue = q.issue;
     var note = '';
+    if (aiReady) {
+      final u = await aiUnderstand(raw);
+      if (u != null && u.terms.isNotEmpty) {
+        terms = u.terms;
+        if (u.issue.isNotEmpty) issue = u.issue;
+      }
+    }
     var quotes = await _search(terms);
+    if (quotes.isEmpty && terms != q.terms) {
+      terms = q.terms;
+      quotes = await _search(terms);
+    }
     if (quotes.isEmpty) {
       // لعلّه خطأ إملائي: نجرّب بدائل قريبة
       for (final v in typoVariants(terms).take(4)) {
@@ -1749,14 +1798,31 @@ class AnswerEngine {
       quotes = await _search([sorted.first]);
       if (quotes.isNotEmpty) terms = [sorted.first];
     }
+    var summary = '';
+    if (quotes.isNotEmpty && aiReady) {
+      final a = await aiArrange(raw, quotes);
+      if (a != null) {
+        summary = a.summary;
+        if (a.order.isNotEmpty) {
+          quotes = <Quote>[
+            for (final i in a.order) quotes[i],
+            for (var i = 0; i < quotes.length; i++)
+              if (!a.order.contains(i)) quotes[i],
+          ];
+        }
+      }
+    }
     return ChatMessage(
       fromUser: false,
       text: greet,
-      issue: q.issue,
+      issue: issue,
       terms: terms,
-      quotes: quotes.map((x) => x.withIssue(q.issue)).toList(),
+      summary: summary,
+      quotes: quotes.map((x) => x.withIssue(issue)).toList(),
       notice: quotes.isEmpty
-          ? 'لم أجد للشيخ ابن عثيمين رَحِمَهُ الله كلامًا في هذه المسألة في كتبه المضافة.'
+          ? (app.scope == 'all' && !webLocal
+              ? 'لم أجد في كتب «تراث» كلامًا في هذه المسألة بهذه الألفاظ.'
+              : 'لم أجد للشيخ ابن عثيمين رَحِمَهُ الله كلامًا في هذه المسألة في كتبه المضافة.')
           : note,
     );
   }
@@ -2085,7 +2151,7 @@ class _HomeScreenState extends State<HomeScreen> {
     } else if ((q['q'] ?? '').trim().isNotEmpty) {
       _send(q['q']);
     }
-    if (kIsWeb) {
+    if (webLocal) {
       Future<void>.delayed(const Duration(seconds: 3), localIndex.preload);
     } else {
       checkForUpdate(context);
@@ -2477,21 +2543,31 @@ class _HomeScreenState extends State<HomeScreen> {
             icon: const Icon(Icons.add_comment_outlined),
             onPressed: _newChat,
           ),
-          IconButton(
-            tooltip: 'المفضلة',
-            icon: const Icon(Icons.star_outline),
-            onPressed: () => Navigator.of(context).push(
-                MaterialPageRoute<void>(builder: (_) => const FavoritesScreen())),
-          ),
-          IconButton(
-            tooltip: 'الإعدادات',
-            icon: const Icon(Icons.settings_outlined),
-            onPressed: () => Navigator.of(context).push(
-                MaterialPageRoute<void>(builder: (_) => const SettingsScreen())),
-          ),
         ],
       ),
       drawer: _buildDrawer(),
+      bottomNavigationBar: NavigationBar(
+        height: 64,
+        selectedIndex: 0,
+        onDestinationSelected: (i) {
+          if (i == 0) return;
+          final Widget w = i == 1
+              ? const LibraryScreen()
+              : (i == 2 ? const FavoritesScreen() : const SettingsScreen());
+          Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => w));
+        },
+        destinations: const [
+          NavigationDestination(
+              icon: Icon(Icons.chat_bubble_outline),
+              selectedIcon: Icon(Icons.chat_bubble),
+              label: 'اسأل'),
+          NavigationDestination(
+              icon: Icon(Icons.local_library_outlined), label: 'الكتب'),
+          NavigationDestination(icon: Icon(Icons.star_outline), label: 'المحفوظات'),
+          NavigationDestination(
+              icon: Icon(Icons.settings_outlined), label: 'الإعدادات'),
+        ],
+      ),
       onDrawerChanged: (open) {
         if (open) setState(() {});
       },
@@ -2779,30 +2855,24 @@ class _EmptyState extends StatelessWidget {
         Row(children: [
           Expanded(
               child: _ToolCard(
-                  icon: Icons.local_library_outlined,
-                  label: 'الكتب',
-                  onTap: () => go(const LibraryScreen()))),
-          const SizedBox(width: 8),
-          Expanded(
-              child: _ToolCard(
                   icon: Icons.format_list_bulleted,
-                  label: 'الفهرس',
+                  label: 'فهرس الفتاوى',
                   onTap: () {
                     if (majmu != null) go(TocScreen(book: majmu));
                   })),
           const SizedBox(width: 8),
           Expanded(
               child: _ToolCard(
-                  icon: Icons.star_outline,
-                  label: 'المحفوظات',
-                  onTap: () => go(const FavoritesScreen()))),
+                  icon: Icons.casino_outlined,
+                  label: 'مسألة عشوائية',
+                  onTap: () =>
+                      onAsk(kTopics[math.Random().nextInt(kTopics.length)]))),
           const SizedBox(width: 8),
           Expanded(
               child: _ToolCard(
-                  icon: Icons.casino_outlined,
-                  label: 'عشوائية',
-                  onTap: () =>
-                      onAsk(kTopics[math.Random().nextInt(kTopics.length)]))),
+                  icon: Icons.help_outline,
+                  label: 'طريقة الاستخدام',
+                  onTap: () => go(const HowToScreen()))),
         ]),
         if (app.dailyCard) ...[
           const SizedBox(height: 12),
@@ -2942,6 +3012,16 @@ class _BotAnswer extends StatelessWidget {
         child: Text(message.text, style: const TextStyle(fontSize: 16)),
       ));
     }
+    if (message.summary.isNotEmpty) {
+      parts.add(_SummaryBox(text: message.summary));
+    }
+    if (message.quotes.any((x) => x.author.isNotEmpty)) {
+      parts.add(const Padding(
+        padding: EdgeInsets.only(bottom: 8),
+        child: _NoticeBox(
+            text: 'هذه نتائج من عموم كتب «تراث»، ولم تُراجَع قائمة مؤلفيها بعد. تثبّت من حال المؤلف.'),
+      ));
+    }
     for (var i = 0; i < message.quotes.length; i++) {
       final q = message.quotes[i];
       parts.add(Dismissible(
@@ -2960,7 +3040,7 @@ class _BotAnswer extends StatelessWidget {
         ),
         child: QuoteCard(
             quote: q,
-            intro: i == 0 ? kScholarIntro : kScholarAgain,
+            intro: q.introLine(i == 0),
             terms: message.terms),
       ));
     }
@@ -3500,6 +3580,38 @@ class _SettingsScreenState extends State<SettingsScreen> {
               value: app.dailyCard,
               onChanged: app.setDaily,
             ),
+            if (!webLocal) ...[
+              const Padding(
+                padding: EdgeInsets.fromLTRB(16, 8, 16, 4),
+                child: Text('نطاق البحث'),
+              ),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                child: SegmentedButton<String>(
+                  segments: const [
+                    ButtonSegment(value: 'sheikh', label: Text('كتب ابن عثيمين')),
+                    ButtonSegment(value: 'all', label: Text('كل كتب «تراث»')),
+                  ],
+                  selected: {app.scope},
+                  onSelectionChanged: (s) => app.setScope(s.first),
+                ),
+              ),
+              if (app.scope == 'all')
+                const Padding(
+                  padding: EdgeInsets.fromLTRB(16, 0, 16, 6),
+                  child: Text(
+                      'تنبيه: «تراث» فيه آلاف الكتب لمؤلفين شتّى، ولم تُحدَّد قائمة الثقات بعد.',
+                      style: TextStyle(fontSize: 12)),
+                ),
+            ],
+            if (proxyOn)
+              SwitchListTile(
+                secondary: const Icon(Icons.auto_awesome),
+                title: const Text('الذكاء الاصطناعي'),
+                subtitle: const Text('يفهم السؤال ويرتّب النقول ويكتب سطر خلاصة'),
+                value: app.aiOn,
+                onChanged: app.setAi,
+              ),
             const Padding(
               padding: EdgeInsets.fromLTRB(16, 8, 16, 4),
               child: Text('ترتيب النتائج'),

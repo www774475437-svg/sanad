@@ -821,7 +821,7 @@ class _BookSearchScreenState extends State<BookSearchScreen> {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final titlesOnly = kIsWeb && !localIndex.hasFullText(widget.book.id);
+    final titlesOnly = webLocal && !localIndex.hasFullText(widget.book.id);
     return Scaffold(
       appBar: AppBar(
         title: Text('بحث في: ${widget.book.title}',
@@ -880,7 +880,7 @@ class _BookSearchScreenState extends State<BookSearchScreen> {
                       padding: const EdgeInsets.all(12),
                       children: [
                         for (final q in list)
-                          QuoteCard(quote: q, intro: kScholarIntro, terms: _terms),
+                          QuoteCard(quote: q, intro: q.introLine(true), terms: _terms),
                       ],
                     );
                   },
@@ -1688,7 +1688,7 @@ class _ShareCardScreenState extends State<ShareCardScreen> {
                   Center(child: Container(width: 60, height: 2, color: c.$4)),
                   const SizedBox(height: 14),
                 ],
-                Text(kScholarIntro,
+                Text(q.introLine(true),
                     style: TextStyle(
                         fontSize: 13,
                         fontWeight: FontWeight.w600,
@@ -1798,7 +1798,7 @@ class HowToScreen extends StatelessWidget {
       (Icons.menu_book_outlined, 'افتح الصفحة في الكتاب', 'اضغط اسم الكتاب تحت النقل لتقرأ المسألة من أولها داخل التطبيق.'),
       (Icons.close, 'حسّن البحث', 'تحت الجواب تظهر كلمات البحث. احذف الكلمة غير المقصودة بضغطة فيُعاد البحث، أو اضغط «مسائل متقاربة».'),
       (Icons.star_outline, 'احفظ وشارك', 'النجمة للحفظ، وزر الصورة لمشاركة النقل صورةً، وزر النسخ بتنسيق تيليجرام أو واتساب.'),
-      (Icons.local_library_outlined, 'تصفّح كتب الشيخ', 'من القائمة الجانبية افتح «كتب الشيخ»، ثم اختر كتابًا لتقرأه أو تتصفح فهرسه أو تبحث داخله.'),
+      (Icons.local_library_outlined, 'تصفّح كتب الشيخ', 'من الشريط السفلي افتح «الكتب»، ثم اختر كتابًا لتقرأه أو تتصفح فهرسه أو تبحث داخله.'),
       (Icons.download_for_offline_outlined, 'بلا إنترنت', 'في تطبيق الأندرويد يمكنك تنزيل الكتب من «كتب الشيخ» لتقرأ وتبحث دون اتصال.'),
     ];
     return Scaffold(
