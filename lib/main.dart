@@ -2496,11 +2496,20 @@ class _HomeScreenState extends State<HomeScreen> {
         if (open) setState(() {});
       },
       body: SafeArea(
-        child: Column(
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 780),
+            child: Column(
           children: [
             Expanded(
               child: messages.isEmpty && !_loading
-                  ? _EmptyState(onAsk: _send)
+                  ? _EmptyState(
+                      onAsk: _send,
+                      input: Column(mainAxisSize: MainAxisSize.min, children: [
+                        _inputRow(centered: true),
+                        _suggestions(),
+                      ]),
+                    )
                   : ListView.builder(
                       controller: _scroll,
                       padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
@@ -2519,8 +2528,10 @@ class _HomeScreenState extends State<HomeScreen> {
                       },
                     ),
             ),
-            _inputBar(),
+            if (messages.isNotEmpty || _loading) _inputBar(),
           ],
+            ),
+          ),
         ),
       ),
     );
@@ -2592,14 +2603,19 @@ class _HomeScreenState extends State<HomeScreen> {
         children: [_suggestions(), _inputRow()],
       );
 
-  Widget _inputRow() {
+  Widget _inputRow({bool centered = false}) {
     final scheme = Theme.of(context).colorScheme;
     return Container(
-      padding: const EdgeInsets.fromLTRB(10, 6, 10, 10),
-      decoration: BoxDecoration(
-        color: Theme.of(context).scaffoldBackgroundColor,
-        border: Border(top: BorderSide(color: scheme.outlineVariant, width: 0.5)),
-      ),
+      padding: centered
+          ? const EdgeInsets.symmetric(vertical: 4)
+          : const EdgeInsets.fromLTRB(10, 6, 10, 10),
+      decoration: centered
+          ? null
+          : BoxDecoration(
+              color: Theme.of(context).scaffoldBackgroundColor,
+              border:
+                  Border(top: BorderSide(color: scheme.outlineVariant, width: 0.5)),
+            ),
       child: Row(children: [
         Expanded(
           child: TextField(
@@ -2609,13 +2625,13 @@ class _HomeScreenState extends State<HomeScreen> {
             textInputAction: TextInputAction.send,
             onSubmitted: (_) => _send(),
             decoration: InputDecoration(
-              hintText: 'اكتب سؤالك، مثل: ما حكم النمص؟',
+              hintText: centered ? 'اسأل سَنَد...' : 'اكتب سؤالك، مثل: ما حكم النمص؟',
               filled: true,
               fillColor: scheme.surfaceContainerHighest,
-              contentPadding:
-                  const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              contentPadding: EdgeInsets.symmetric(
+                  horizontal: centered ? 22 : 16, vertical: centered ? 18 : 12),
               border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(24),
+                borderRadius: BorderRadius.circular(centered ? 30 : 24),
                 borderSide: BorderSide.none,
               ),
             ),
@@ -2678,9 +2694,45 @@ class _Hero extends StatelessWidget {
   }
 }
 
+class _ToolCard extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+  const _ToolCard({required this.icon, required this.label, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Material(
+      color: scheme.surface,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(18),
+        side: BorderSide(color: scheme.outlineVariant),
+      ),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(18),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 14),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            Icon(icon, color: scheme.primary),
+            const SizedBox(height: 8),
+            Text(label,
+                textAlign: TextAlign.center,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+          ]),
+        ),
+      ),
+    );
+  }
+}
+
 class _EmptyState extends StatelessWidget {
   final void Function(String) onAsk;
-  const _EmptyState({required this.onAsk});
+  final Widget input;
+  const _EmptyState({required this.onAsk, required this.input});
 
   @override
   Widget build(BuildContext context) {
@@ -2688,45 +2740,32 @@ class _EmptyState extends StatelessWidget {
     final lr = app.lastRead;
     final today = kTopics[DateTime.now().difference(DateTime(2024)).inDays % kTopics.length];
     final recents = app.recents.take(6).toList();
+    void go(Widget w) => Navigator.of(context)
+        .push(MaterialPageRoute<void>(builder: (_) => w));
+    final majmu = bookOf(12293);
     return ListView(
-      padding: const EdgeInsets.all(24),
+      padding: const EdgeInsets.fromLTRB(20, 28, 20, 24),
       children: [
-        const _Hero(),
-        const SizedBox(height: 20),
-        if (app.dailyCard)
-        InkWell(
-          borderRadius: BorderRadius.circular(16),
-          onTap: () => onAsk(today),
-          child: Container(
-            padding: const EdgeInsets.all(14),
-            decoration: BoxDecoration(
-              color: scheme.primaryContainer.withOpacity(0.55),
-              borderRadius: BorderRadius.circular(16),
-            ),
-            child: Row(children: [
-              Icon(Icons.wb_sunny_outlined, color: scheme.primary),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('مسألة اليوم',
-                        style: TextStyle(
-                            color: scheme.primary, fontWeight: FontWeight.bold, fontSize: 12)),
-                    const SizedBox(height: 2),
-                    Text(today, style: const TextStyle(fontSize: 16)),
-                  ],
-                ),
-              ),
-              const Icon(Icons.chevron_left),
-            ]),
-          ),
-        ),
-        const SizedBox(height: 18),
-        Text('اختر موضوعًا',
+        Text(kAppName,
             textAlign: TextAlign.center,
-            style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12)),
-        const SizedBox(height: 8),
+            style: TextStyle(
+                fontFamily: 'Amiri',
+                fontSize: 50,
+                height: 1.2,
+                fontWeight: FontWeight.bold,
+                color: scheme.primary)),
+        Center(child: Container(width: 56, height: 2, color: kGold)),
+        const SizedBox(height: 14),
+        const Text('اسأل، والجواب من كتب الشيخ بنصّه',
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: 21, fontWeight: FontWeight.bold, height: 1.5)),
+        const SizedBox(height: 4),
+        Text('${kBooks.length} كتابًا للشيخ ابن عثيمين رَحِمَهُ الله · ينقل ولا يفتي من عنده',
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: 12.5, color: scheme.onSurfaceVariant)),
+        const SizedBox(height: 18),
+        input,
+        const SizedBox(height: 10),
         Wrap(
           alignment: WrapAlignment.center,
           spacing: 8,
@@ -2734,13 +2773,70 @@ class _EmptyState extends StatelessWidget {
           children: [
             ...kTopicChips
                 .map((s) => ActionChip(label: Text(s), onPressed: () => onAsk(s))),
-            ActionChip(
-              avatar: const Icon(Icons.casino_outlined, size: 18),
-              label: const Text('مسألة عشوائية'),
-              onPressed: () => onAsk(kTopics[math.Random().nextInt(kTopics.length)]),
-            ),
           ],
         ),
+        const SizedBox(height: 18),
+        Row(children: [
+          Expanded(
+              child: _ToolCard(
+                  icon: Icons.local_library_outlined,
+                  label: 'كتب الشيخ',
+                  onTap: () => go(const LibraryScreen()))),
+          const SizedBox(width: 8),
+          Expanded(
+              child: _ToolCard(
+                  icon: Icons.format_list_bulleted,
+                  label: 'فهرس الفتاوى',
+                  onTap: () {
+                    if (majmu != null) go(TocScreen(book: majmu));
+                  })),
+          const SizedBox(width: 8),
+          Expanded(
+              child: _ToolCard(
+                  icon: Icons.star_outline,
+                  label: 'محفوظاتي',
+                  onTap: () => go(const FavoritesScreen()))),
+          const SizedBox(width: 8),
+          Expanded(
+              child: _ToolCard(
+                  icon: Icons.casino_outlined,
+                  label: 'مسألة عشوائية',
+                  onTap: () =>
+                      onAsk(kTopics[math.Random().nextInt(kTopics.length)]))),
+        ]),
+        if (app.dailyCard) ...[
+          const SizedBox(height: 12),
+          InkWell(
+            borderRadius: BorderRadius.circular(16),
+            onTap: () => onAsk(today),
+            child: Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: scheme.primaryContainer.withOpacity(0.55),
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: Row(children: [
+                Icon(Icons.wb_sunny_outlined, color: scheme.primary),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('مسألة اليوم',
+                          style: TextStyle(
+                              color: scheme.primary,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 12)),
+                      const SizedBox(height: 2),
+                      Text(today, style: const TextStyle(fontSize: 16)),
+                    ],
+                  ),
+                ),
+                const Icon(Icons.chevron_left),
+              ]),
+            ),
+          ),
+        ],
         if (recents.isNotEmpty) ...[
           const SizedBox(height: 20),
           Row(
