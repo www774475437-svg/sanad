@@ -353,20 +353,21 @@ class BackupScreen extends StatelessWidget {
 
   Future<void> _restore(BuildContext context) async {
     try {
-      final r = await FilePicker.platform
-          .pickFiles(type: FileType.any, withData: true, allowMultiple: false);
-      if (r == null || r.files.isEmpty) return;
-      final bytes = r.files.first.bytes;
-      if (bytes == null) throw StateError('no bytes');
-      final n = app.importAll(utf8.decode(bytes));
+      final data = await Clipboard.getData('text/plain');
+      final text = (data?.text ?? '').trim();
       if (!context.mounted) return;
+      if (text.isEmpty) {
+        showToast(context, 'انسخ محتوى ملف النسخة أولًا ثم اضغط هنا');
+        return;
+      }
+      final n = app.importAll(text);
       showToast(
           context,
           n < 0
-              ? 'هذا الملف ليس نسخة احتياطية من سَنَد'
-              : (n == 0 ? 'كل ما في الملف موجود عندك' : 'تمت الاستعادة: أُضيف $n عنصرًا'));
+              ? 'المنسوخ ليس نسخة احتياطية من سَنَد'
+              : (n == 0 ? 'كل ما في النسخة موجود عندك' : 'تمت الاستعادة: أُضيف $n عنصرًا'));
     } catch (_) {
-      if (context.mounted) showToast(context, 'تعذّرت قراءة الملف');
+      if (context.mounted) showToast(context, 'تعذّرت قراءة الحافظة');
     }
   }
 
@@ -395,8 +396,8 @@ class BackupScreen extends StatelessWidget {
               const Divider(height: 1),
               ListTile(
                 leading: const Icon(Icons.restore),
-                title: const Text('استعادة من ملف'),
-                subtitle: const Text('اختر ملف النسخة فيُدمج مع ما عندك'),
+                title: const Text('استعادة نسخة'),
+                subtitle: const Text('افتح ملف النسخة وانسخ محتواه كله، ثم اضغط هنا'),
                 onTap: () => _restore(context),
               ),
               const Divider(height: 1),
@@ -525,7 +526,7 @@ void showWhatsNew(BuildContext context) {
     'خط جديد للواجهة، وحركة أوضح أثناء البحث.',
     'أزرار صغيرة تحت الجواب: نسخ الجواب كاملًا، مفيد، غير مفيد، إعادة البحث.',
     'المظهر حسب الوقت: داكن ليلًا وفاتح نهارًا.',
-    'نسخة احتياطية كاملة إلى ملف، واستعادتها منه.',
+    'نسخة احتياطية كاملة إلى ملف، واستعادتها.',
     'مسائل موسمية تظهر في مواسمها (رمضان، ذو الحجة، عاشوراء).',
   ];
   showDialog<void>(
