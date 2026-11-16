@@ -287,7 +287,7 @@ Widget cloudSettingsSection(BuildContext context) {
                   ),
                   onTap: () => _cloudLimitTap(context),
                 ),
-                FutureBuilder<bool>(
+                FutureBuilder<String>(
                   future: cloudRole(),
                   builder: (c, s) => (s.data ?? '').isNotEmpty
                       ? ListTile(
