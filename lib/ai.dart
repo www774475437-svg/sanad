@@ -7,14 +7,14 @@ part of 'main.dart';
 // =====================================================================
 
 /// رابط الخادم الوسيط (Cloudflare Worker، انظر tools/worker.js). فارغ = معطَّل.
-const String kProxyUrl = '';
+const String kProxyUrl = 'https://wandering-wildflower-5c73.www774475437.workers.dev';
 
 bool get proxyOn => kProxyUrl.isNotEmpty;
 
 /// المتصفح بلا خادم وسيط: البحث محلي من ملفات الموقع.
 bool get webLocal => kIsWeb && !proxyOn;
 
-bool get aiReady => proxyOn && app.aiOn;
+bool get aiReady => proxyOn && app.aiOn && remoteAiEnabled;
 
 Future<Map<String, dynamic>?> _aiPost(String path, Map<String, dynamic> body) async {
   try {
@@ -32,6 +32,7 @@ Future<Map<String, dynamic>?> _aiPost(String path, Map<String, dynamic> body) as
 
 /// يستخرج من سؤال المستخدم المسألةَ وكلمات البحث. يرجع null عند أي فشل.
 Future<({String issue, List<String> terms})?> aiUnderstand(String question) async {
+  if (!await aiQuotaTake()) return null;
   final d = await _aiPost('/ai/understand', {'q': question});
   if (d == null) return null;
   final terms = <String>[];
@@ -48,6 +49,7 @@ Future<({String issue, List<String> terms})?> aiUnderstand(String question) asyn
 /// يرتّب النقول حسب إجابتها للسؤال ويكتب سطر خلاصة منها. يرجع null عند أي فشل.
 Future<({List<int> order, String summary})?> aiArrange(
     String question, List<Quote> quotes) async {
+  if (!await aiQuotaTake()) return null;
   final d = await _aiPost('/ai/arrange', {
     'q': question,
     'quotes': [

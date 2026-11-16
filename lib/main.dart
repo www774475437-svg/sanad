@@ -18,6 +18,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:http/http.dart' as http;
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:share_plus/share_plus.dart';
@@ -31,6 +34,7 @@ part 'ai.dart';
 part 'books.dart';
 part 'extras.dart';
 part 'home.dart';
+part 'cloud.dart';
 
 // ---------------------------------------------------------------------
 //  الإعدادات الثابتة
@@ -1950,6 +1954,7 @@ Future<void> main() async {
   } catch (e) {
     debugPrint('storeInit failed: $e');
   }
+  await cloudInit();
   try {
     runApp(const SanadApp());
   } catch (e, st) {
@@ -3488,6 +3493,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 onSelectionChanged: (s) => app.setOrder(s.first),
               ),
             ),
+            if (!kIsWeb) cloudSettingsSection(context),
             const _SectionTitle('البيانات'),
             ListTile(
               leading: const Icon(Icons.delete_sweep_outlined),
