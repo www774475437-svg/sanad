@@ -20,6 +20,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:http/http.dart' as http;
 import 'package:qr_flutter/qr_flutter.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -30,13 +31,14 @@ import 'store_stub.dart' if (dart.library.io) 'store_io.dart';
 part 'ai.dart';
 part 'books.dart';
 part 'extras.dart';
+part 'home.dart';
 
 // ---------------------------------------------------------------------
 //  الإعدادات الثابتة
 // ---------------------------------------------------------------------
 
 const String kAppName = 'سَنَد';
-const String kVersion = '1.4.0';
+const String kVersion = '1.5.0';
 const int kAuthorId = 57;
 const int kBuild = int.fromEnvironment('BUILD', defaultValue: 0);
 const String kSiteUrl = 'https://www774475437-svg.github.io/sanad/';
@@ -450,6 +452,8 @@ String plainFormat(Quote q) =>
 class AppState extends ChangeNotifier {
   SharedPreferences? _p;
   ThemeMode themeMode = ThemeMode.light;
+  String themeKind = 'light';
+  Map<String, int> votes = <String, int>{};
   double fontScale = 1.0;
   List<Conversation> conversations = <Conversation>[];
   List<Quote> favorites = <Quote>[];
@@ -477,6 +481,11 @@ class AppState extends ChangeNotifier {
     _p = await SharedPreferences.getInstance();
     final p = _p!;
     final t = p.getString('theme') ?? 'light';
+    themeKind = t;
+    try {
+      final vj = jsonDecode(p.getString('votes') ?? '{}');
+      if (vj is Map) vj.forEach((k, v) => votes['$k'] = asInt(v));
+    } catch (_) {}
     themeMode = t == 'dark'
         ? ThemeMode.dark
         : (t == 'system' ? ThemeMode.system : ThemeMode.light);
@@ -547,6 +556,102 @@ class AppState extends ChangeNotifier {
             ? 'dark'
             : (m == ThemeMode.system ? 'system' : 'light'));
     notifyListeners();
+  }
+
+  void setThemeKind(String k) {
+    themeKind = k;
+    themeMode = k == 'dark'
+        ? ThemeMode.dark
+        : (k == 'system' ? ThemeMode.system : ThemeMode.light);
+    _p?.setString('theme', k);
+    notifyListeners();
+  }
+
+  int voteOf(String key) => votes[key] ?? 0;
+
+  void setVote(String key, int v) {
+    if (votes[key] == v) {
+      votes.remove(key);
+    } else {
+      votes[key] = v;
+    }
+    _p?.setString('votes', jsonEncode(votes));
+    notifyListeners();
+  }
+
+  bool get onboarded => _p?.getBool('onboarded') ?? false;
+  void setOnboarded() => _p?.setBool('onboarded', true);
+  String get seenVersion => _p?.getString('seenVersion') ?? '';
+  void setSeenVersion() => _p?.setString('seenVersion', kVersion);
+
+  /// نسخة احتياطية كاملة: المفضلة والمحادثات والملاحظات والمجلدات والعلامات.
+  String exportAll() => jsonEncode({
+        'sanad': 2,
+        'favorites': favorites.map((f) => f.toJson()).toList(),
+        'later': later.map((f) => f.toJson()).toList(),
+        'conversations': conversations.map((c) => c.toJson()).toList(),
+        'notes': notes,
+        'folders': folders,
+        'folderNames': folderNames,
+        'marks': marks,
+      });
+
+  /// يستعيد نسخة احتياطية ويدمجها مع الموجود. يرجع عدد ما أُضيف، أو -1 عند الفشل.
+  int importAll(String text) {
+    try {
+      final d = jsonDecode(text);
+      if (d is! Map) return importFavorites(text);
+      var n = 0;
+      for (final m in asMapList(d['favorites'])) {
+        final q = Quote.fromJson(m);
+        if (q.text.isNotEmpty && !isFavorite(q)) {
+          favorites.add(q);
+          n++;
+        }
+      }
+      for (final m in asMapList(d['later'])) {
+        final q = Quote.fromJson(m);
+        if (q.text.isNotEmpty && !later.any((x) => x.key == q.key)) {
+          later.add(q);
+          n++;
+        }
+      }
+      for (final m in asMapList(d['conversations'])) {
+        final c = Conversation.fromJson(m);
+        if (!conversations.any((x) => x.id == c.id)) {
+          conversations.add(c);
+          n++;
+        }
+      }
+      final nj = d['notes'];
+      if (nj is Map) nj.forEach((k, v) => notes.putIfAbsent('$k', () => '$v'));
+      final fj = d['folders'];
+      if (fj is Map) fj.forEach((k, v) => folders.putIfAbsent('$k', () => '$v'));
+      final fn = d['folderNames'];
+      if (fn is List) {
+        for (final x in fn) {
+          if (!folderNames.contains('$x')) folderNames.add('$x');
+        }
+      }
+      for (final m in asMapList(d['marks'])) {
+        if (!isMarked(asInt(m['b']), asInt(m['pid']))) marks.add(m);
+      }
+      final p = _p;
+      if (p != null) {
+        p.setString('favorites', jsonEncode(favorites.map((f) => f.toJson()).toList()));
+        p.setString('later', jsonEncode(later.map((f) => f.toJson()).toList()));
+        p.setString('conversations',
+            jsonEncode(conversations.map((c) => c.toJson()).toList()));
+        p.setString('notes', jsonEncode(notes));
+        p.setString('folders', jsonEncode(folders));
+        p.setStringList('folderNames', folderNames);
+        p.setString('marks', jsonEncode(marks));
+      }
+      notifyListeners();
+      return n;
+    } catch (_) {
+      return -1;
+    }
   }
 
   void setFontScale(double v) {
@@ -1894,6 +1999,7 @@ ThemeData buildTheme(Brightness b, String pal) {
   }
   return ThemeData(
     useMaterial3: true,
+    fontFamily: 'Plex',
     colorScheme: scheme,
     scaffoldBackgroundColor: bg,
     appBarTheme: AppBarTheme(
@@ -1903,8 +2009,8 @@ ThemeData buildTheme(Brightness b, String pal) {
       scrolledUnderElevation: 0,
       centerTitle: true,
       titleTextStyle: TextStyle(
-        fontFamily: 'Amiri',
-        fontSize: 26,
+        fontFamily: 'Plex',
+        fontSize: 21,
         fontWeight: FontWeight.bold,
         color: scheme.onSurface,
       ),
@@ -1915,6 +2021,10 @@ ThemeData buildTheme(Brightness b, String pal) {
 ThemeMode effectiveThemeMode() {
   if (app.palette == 'black') return ThemeMode.dark;
   if (app.palette == 'paper') return ThemeMode.light;
+  if (app.themeKind == 'time') {
+    final h = DateTime.now().hour;
+    return (h >= 18 || h < 6) ? ThemeMode.dark : ThemeMode.light;
+  }
   return app.themeMode;
 }
 
@@ -2123,7 +2233,21 @@ class _HomeScreenState extends State<HomeScreen> {
     final b = int.tryParse(q['b'] ?? '');
     final view = q['v'] ?? '';
     final vb = bookOf(b ?? 0);
-    if (view == 'lib') {
+    if (view == 'welcome' || (q.isEmpty && !app.onboarded)) {
+      app.setOnboarded();
+      app.setSeenVersion();
+      Navigator.of(context).push(MaterialPageRoute<void>(
+          fullscreenDialog: true, builder: (_) => const OnboardingScreen()));
+    } else if (q.isEmpty && app.seenVersion != kVersion) {
+      app.setSeenVersion();
+      showWhatsNew(context);
+    }
+    if (view == 'tools') {
+      showToolsSheet(context, _send);
+    } else if (view == 'backup') {
+      Navigator.of(context)
+          .push(MaterialPageRoute<void>(builder: (_) => const BackupScreen()));
+    } else if (view == 'lib') {
       Navigator.of(context).push(
           MaterialPageRoute<void>(builder: (_) => const LibraryScreen()));
     } else if (view == 'book' && vb != null) {
@@ -2546,28 +2670,6 @@ class _HomeScreenState extends State<HomeScreen> {
         ],
       ),
       drawer: _buildDrawer(),
-      bottomNavigationBar: NavigationBar(
-        height: 64,
-        selectedIndex: 0,
-        onDestinationSelected: (i) {
-          if (i == 0) return;
-          final Widget w = i == 1
-              ? const LibraryScreen()
-              : (i == 2 ? const FavoritesScreen() : const SettingsScreen());
-          Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => w));
-        },
-        destinations: const [
-          NavigationDestination(
-              icon: Icon(Icons.chat_bubble_outline),
-              selectedIcon: Icon(Icons.chat_bubble),
-              label: 'اسأل'),
-          NavigationDestination(
-              icon: Icon(Icons.local_library_outlined), label: 'الكتب'),
-          NavigationDestination(icon: Icon(Icons.star_outline), label: 'المحفوظات'),
-          NavigationDestination(
-              icon: Icon(Icons.settings_outlined), label: 'الإعدادات'),
-        ],
-      ),
       onDrawerChanged: (open) {
         if (open) setState(() {});
       },
@@ -2693,6 +2795,11 @@ class _HomeScreenState extends State<HomeScreen> {
                   Border(top: BorderSide(color: scheme.outlineVariant, width: 0.5)),
             ),
       child: Row(children: [
+        IconButton(
+          tooltip: 'المزايا',
+          onPressed: () => showToolsSheet(context, _send),
+          icon: const Icon(Icons.add_circle_outline),
+        ),
         Expanded(
           child: TextField(
             controller: _input,
@@ -2766,199 +2873,6 @@ class _Hero extends StatelessWidget {
           ),
         ]),
       ),
-    );
-  }
-}
-
-class _ToolCard extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final VoidCallback onTap;
-  const _ToolCard({required this.icon, required this.label, required this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Material(
-      color: scheme.surface,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(18),
-        side: BorderSide(color: scheme.outlineVariant),
-      ),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(18),
-        onTap: onTap,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 14),
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-            Icon(icon, color: scheme.primary),
-            const SizedBox(height: 8),
-            Text(label,
-                textAlign: TextAlign.center,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-          ]),
-        ),
-      ),
-    );
-  }
-}
-
-class _EmptyState extends StatelessWidget {
-  final void Function(String) onAsk;
-  final Widget input;
-  const _EmptyState({required this.onAsk, required this.input});
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final lr = app.lastRead;
-    final today = kTopics[DateTime.now().difference(DateTime(2024)).inDays % kTopics.length];
-    final recents = app.recents.take(6).toList();
-    void go(Widget w) => Navigator.of(context)
-        .push(MaterialPageRoute<void>(builder: (_) => w));
-    final majmu = bookOf(12293);
-    return ListView(
-      padding: const EdgeInsets.fromLTRB(20, 28, 20, 24),
-      children: [
-        Text(kAppName,
-            textAlign: TextAlign.center,
-            style: TextStyle(
-                fontFamily: 'Amiri',
-                fontSize: 50,
-                height: 1.2,
-                fontWeight: FontWeight.bold,
-                color: scheme.primary)),
-        Center(child: Container(width: 56, height: 2, color: kGold)),
-        const SizedBox(height: 14),
-        const Text('اسأل، والجواب من كتب الشيخ بنصّه',
-            textAlign: TextAlign.center,
-            style: TextStyle(fontSize: 21, fontWeight: FontWeight.bold, height: 1.5)),
-        const SizedBox(height: 4),
-        Text('${kBooks.length} كتابًا للشيخ ابن عثيمين رَحِمَهُ الله · ينقل ولا يفتي من عنده',
-            textAlign: TextAlign.center,
-            style: TextStyle(fontSize: 12.5, color: scheme.onSurfaceVariant)),
-        const SizedBox(height: 18),
-        input,
-        const SizedBox(height: 10),
-        Wrap(
-          alignment: WrapAlignment.center,
-          spacing: 8,
-          runSpacing: 8,
-          children: [
-            ...kTopicChips
-                .map((s) => ActionChip(label: Text(s), onPressed: () => onAsk(s))),
-          ],
-        ),
-        const SizedBox(height: 18),
-        Row(children: [
-          Expanded(
-              child: _ToolCard(
-                  icon: Icons.format_list_bulleted,
-                  label: 'فهرس الفتاوى',
-                  onTap: () {
-                    if (majmu != null) go(TocScreen(book: majmu));
-                  })),
-          const SizedBox(width: 8),
-          Expanded(
-              child: _ToolCard(
-                  icon: Icons.casino_outlined,
-                  label: 'مسألة عشوائية',
-                  onTap: () =>
-                      onAsk(kTopics[math.Random().nextInt(kTopics.length)]))),
-          const SizedBox(width: 8),
-          Expanded(
-              child: _ToolCard(
-                  icon: Icons.help_outline,
-                  label: 'طريقة الاستخدام',
-                  onTap: () => go(const HowToScreen()))),
-        ]),
-        if (app.dailyCard) ...[
-          const SizedBox(height: 12),
-          InkWell(
-            borderRadius: BorderRadius.circular(16),
-            onTap: () => onAsk(today),
-            child: Container(
-              padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(
-                color: scheme.primaryContainer.withOpacity(0.55),
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: Row(children: [
-                Icon(Icons.wb_sunny_outlined, color: scheme.primary),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('مسألة اليوم',
-                          style: TextStyle(
-                              color: scheme.primary,
-                              fontWeight: FontWeight.bold,
-                              fontSize: 12)),
-                      const SizedBox(height: 2),
-                      Text(today, style: const TextStyle(fontSize: 16)),
-                    ],
-                  ),
-                ),
-                const Icon(Icons.chevron_left),
-              ]),
-            ),
-          ),
-        ],
-        if (recents.isNotEmpty) ...[
-          const SizedBox(height: 20),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Text('آخر ما بحثتَ عنه',
-                  style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12)),
-              const SizedBox(width: 6),
-              InkWell(
-                onTap: app.clearRecents,
-                child: Text('مسح',
-                    style: TextStyle(color: scheme.primary, fontSize: 12)),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Wrap(
-            alignment: WrapAlignment.center,
-            spacing: 8,
-            runSpacing: 8,
-            children: recents
-                .map((s) => ActionChip(
-                      avatar: const Icon(Icons.history, size: 16),
-                      label: Text(s),
-                      onPressed: () => onAsk(s),
-                    ))
-                .toList(),
-          ),
-        ],
-        if (lr != null) ...[
-          const SizedBox(height: 22),
-          Center(
-            child: TextButton.icon(
-              icon: const Icon(Icons.bookmark_outline, size: 18),
-              label: Text('أكمل القراءة: ${asStr(lr['n'])}، صـ ${asStr(lr['l'])}',
-                  style: const TextStyle(fontSize: 13)),
-              onPressed: () => Navigator.of(context).push(MaterialPageRoute<void>(
-                builder: (_) => ReaderScreen(
-                  quote: Quote(
-                    bookId: asInt(lr['b']),
-                    bookName: asStr(lr['n']),
-                    vol: '',
-                    page: asStr(lr['l']),
-                    pageId: asInt(lr['pid']),
-                    text: '',
-                  ),
-                ),
-              )),
-            ),
-          ),
-        ],
-      ],
     );
   }
 }
@@ -3049,6 +2963,9 @@ class _BotAnswer extends StatelessWidget {
     }
     if (message.terms.isNotEmpty && message.quotes.isNotEmpty) {
       parts.add(_TermsBar(terms: message.terms, onAsk: onAsk));
+    }
+    if (message.quotes.isNotEmpty) {
+      parts.add(_AnswerActions(message: message, onAsk: onAsk));
     }
     return Padding(
       padding: const EdgeInsets.only(bottom: 14),
@@ -3382,56 +3299,6 @@ class QuoteCard extends StatelessWidget {
 }
 
 /// «جارٍ البحث في كتب الشيخ ابن عثيمين...» مع عدسة متحركة.
-class SearchingIndicator extends StatefulWidget {
-  const SearchingIndicator({super.key});
-  @override
-  State<SearchingIndicator> createState() => _SearchingIndicatorState();
-}
-
-class _SearchingIndicatorState extends State<SearchingIndicator>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _c =
-      AnimationController(vsync: this, duration: const Duration(milliseconds: 1200))
-        ..repeat();
-
-  @override
-  void dispose() {
-    _c.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 12),
-      child: Row(children: [
-        AnimatedBuilder(
-          animation: _c,
-          builder: (context, child) {
-            final t = _c.value * 2 * math.pi;
-            return Transform.translate(
-              offset: Offset(math.cos(t) * 4, math.sin(t) * 4),
-              child: child,
-            );
-          },
-          child: Icon(Icons.search, color: scheme.primary),
-        ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: ValueListenableBuilder<String>(
-            valueListenable: localIndex.status,
-            builder: (context, st, _) => Text(
-                st.isEmpty ? 'جارٍ البحث في كتب الشيخ ابن عثيمين...' : st,
-                style: TextStyle(color: scheme.onSurfaceVariant)),
-          ),
-        ),
-      ]),
-    );
-  }
-}
-
-/// يُظهر العنصر بالتدريج.
 class FadeIn extends StatefulWidget {
   final Widget child;
   final int delayMs;
@@ -3540,24 +3407,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     style: TextStyle(fontSize: 12)),
               ),
             const _SectionTitle('المظهر'),
-            RadioListTile<ThemeMode>(
-              value: ThemeMode.light,
-              groupValue: app.themeMode,
-              onChanged: (v) => app.setTheme(v ?? ThemeMode.light),
-              title: const Text('فاتح'),
-            ),
-            RadioListTile<ThemeMode>(
-              value: ThemeMode.dark,
-              groupValue: app.themeMode,
-              onChanged: (v) => app.setTheme(v ?? ThemeMode.dark),
-              title: const Text('داكن (الوضع الليلي)'),
-            ),
-            RadioListTile<ThemeMode>(
-              value: ThemeMode.system,
-              groupValue: app.themeMode,
-              onChanged: (v) => app.setTheme(v ?? ThemeMode.system),
-              title: const Text('تلقائي حسب الهاتف'),
-            ),
+            for (final e in const [
+              ['light', 'فاتح'],
+              ['dark', 'داكن (الوضع الليلي)'],
+              ['system', 'تلقائي حسب الهاتف'],
+              ['time', 'حسب الوقت: داكن ليلًا وفاتح نهارًا'],
+            ])
+              RadioListTile<String>(
+                value: e[0],
+                groupValue: app.themeKind,
+                onChanged: (v) => app.setThemeKind(v ?? 'light'),
+                title: Text(e[1]),
+              ),
             const _SectionTitle('حجم الخط'),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
@@ -3677,6 +3538,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 await Clipboard.setData(ClipboardData(text: app.exportFavorites()));
                 if (context.mounted) showToast(context, 'تم نسخ المفضلة');
               },
+            ),
+            ListTile(
+              leading: const Icon(Icons.backup_outlined),
+              title: const Text('النسخة الاحتياطية'),
+              subtitle: const Text('احفظ كل شيء في ملف، أو استعده منه'),
+              trailing: const Icon(Icons.chevron_left),
+              onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute<void>(builder: (_) => const BackupScreen())),
             ),
             ListTile(
               leading: const Icon(Icons.ios_share),

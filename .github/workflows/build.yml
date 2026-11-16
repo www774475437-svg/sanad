@@ -73,6 +73,21 @@ jobs:
 
       - run: flutter pub get
 
+
+      - name: Fonts (UI)
+        run: |
+          B=https://raw.githubusercontent.com/google/fonts/main/ofl/ibmplexsansarabic
+          ok=1
+          for w in Regular Medium Bold; do curl -fsSL -o assets/fonts/Plex-$w.ttf $B/IBMPlexSansArabic-$w.ttf || ok=0; done
+          if [ $ok = 1 ] && grep -q "family: Amiri" pubspec.yaml; then
+            printf '    - family: Plex\n      fonts:\n        - asset: assets/fonts/Plex-Regular.ttf\n        - asset: assets/fonts/Plex-Medium.ttf\n          weight: 500\n        - asset: assets/fonts/Plex-Bold.ttf\n          weight: 700\n' >> pubspec.yaml
+            echo "ui font added"
+          else
+            rm -f assets/fonts/Plex-*.ttf
+            echo "ui font skipped"
+          fi
+          tail -20 pubspec.yaml
+
       - name: Disable Android lint checks
         run: |
           mkdir -p ~/.gradle/init.d
@@ -158,6 +173,21 @@ jobs:
           fi
 
       - run: flutter pub get
+
+
+      - name: Fonts (UI)
+        run: |
+          B=https://raw.githubusercontent.com/google/fonts/main/ofl/ibmplexsansarabic
+          ok=1
+          for w in Regular Medium Bold; do curl -fsSL -o assets/fonts/Plex-$w.ttf $B/IBMPlexSansArabic-$w.ttf || ok=0; done
+          if [ $ok = 1 ] && grep -q "family: Amiri" pubspec.yaml; then
+            printf '    - family: Plex\n      fonts:\n        - asset: assets/fonts/Plex-Regular.ttf\n        - asset: assets/fonts/Plex-Medium.ttf\n          weight: 500\n        - asset: assets/fonts/Plex-Bold.ttf\n          weight: 700\n' >> pubspec.yaml
+            echo "ui font added"
+          else
+            rm -f assets/fonts/Plex-*.ttf
+            echo "ui font skipped"
+          fi
+          tail -20 pubspec.yaml
 
       - name: Check turath CORS
         run: |
