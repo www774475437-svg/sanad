@@ -249,6 +249,8 @@ jobs:
           branch: gh-pages
           clean: true
           single-commit: true
+          git-config-name: www774475437-svg
+          git-config-email: 338496743+www774475437-svg@users.noreply.github.com
 
       - name: Try to enable Pages
         continue-on-error: true
