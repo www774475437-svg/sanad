@@ -1973,8 +1973,16 @@ Future<void> main() async {
 }
 
 ThemeData buildTheme(Brightness b, String pal) {
-  var scheme = ColorScheme.fromSeed(seedColor: kBrand, brightness: b);
-  var bg = b == Brightness.light ? const Color(0xFFF6F8F7) : const Color(0xFF101414);
+  // الألوان الافتراضية كما في «منتقيات الشعر»: ورق دافئ وبنّي محروق.
+  final isDark = b == Brightness.dark;
+  var scheme = ColorScheme.fromSeed(seedColor: const Color(0xFF8C4A2F), brightness: b).copyWith(
+    primary: isDark ? const Color(0xFFD9956A) : const Color(0xFF8C4A2F),
+    onPrimary: isDark ? const Color(0xFF15130F) : Colors.white,
+    surface: isDark ? const Color(0xFF201D18) : const Color(0xFFF0ECE4),
+    surfaceContainerHighest: isDark ? const Color(0xFF2C2620) : const Color(0xFFE6DED2),
+    outlineVariant: isDark ? const Color(0xFF332E27) : const Color(0xFFE0D9CC),
+  );
+  var bg = isDark ? const Color(0xFF15130F) : const Color(0xFFF7F4EE);
   if (pal == 'black') {
     scheme = ColorScheme.fromSeed(
             seedColor: const Color(0xFFD4AF37), brightness: Brightness.dark)
@@ -2006,6 +2014,28 @@ ThemeData buildTheme(Brightness b, String pal) {
     fontFamily: 'Plex',
     colorScheme: scheme,
     scaffoldBackgroundColor: bg,
+    cardTheme: CardThemeData(
+      color: scheme.surface,
+      elevation: 0,
+      margin: EdgeInsets.zero,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(26),
+        side: BorderSide(color: scheme.outlineVariant),
+      ),
+    ),
+    filledButtonTheme: FilledButtonThemeData(
+      style: FilledButton.styleFrom(
+        minimumSize: const Size(48, 48),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        textStyle: const TextStyle(fontWeight: FontWeight.w700),
+      ),
+    ),
+    outlinedButtonTheme: OutlinedButtonThemeData(
+      style: OutlinedButton.styleFrom(
+        minimumSize: const Size(48, 48),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      ),
+    ),
     appBarTheme: AppBarTheme(
       backgroundColor: bg,
       surfaceTintColor: Colors.transparent,
@@ -2040,7 +2070,7 @@ ThemeMode effectiveThemeMode() {
     case 'paper':
       return (const Color(0xFF6B4F2A), const Color(0xFF8C6A39), const Color(0xFFFFF8E1));
     default:
-      return (const Color(0xFF0B4A44), const Color(0xFF11766B), Colors.white);
+      return (const Color(0xFF8C4A2F), const Color(0xFFA8643F), Colors.white);
   }
 }
 

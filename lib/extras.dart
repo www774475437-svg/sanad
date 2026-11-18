@@ -1617,8 +1617,8 @@ class _ShareCardScreenState extends State<ShareCardScreen> {
         );
     }
     return (
-      const Color(0xFF0B4A44),
-      const Color(0xFF11766B),
+      const Color(0xFF8C4A2F),
+      const Color(0xFFA8643F),
       Colors.white,
       const Color(0xFFE7C65A)
     );
