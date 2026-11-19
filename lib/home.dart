@@ -96,10 +96,15 @@ class _EmptyState extends StatelessWidget {
                   children: [
                     for (final t in tips)
                       ActionChip(
-                        label: Text(t, style: const TextStyle(fontSize: 13)),
+                        label: Text(t, style: TextStyle(fontSize: 14, color: scheme.onSurface)),
                         visualDensity: VisualDensity.compact,
-                        shape: StadiumBorder(
-                            side: BorderSide(color: scheme.outlineVariant)),
+                        backgroundColor: scheme.surface,
+                        elevation: 0,
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(16),
+                          side: BorderSide(color: scheme.outlineVariant),
+                        ),
                         onPressed: () => onAsk(t),
                       ),
                   ],
