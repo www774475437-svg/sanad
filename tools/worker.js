@@ -1,7 +1,7 @@
 // خادم سَنَد الوسيط (Cloudflare Worker).
 // 1) /t/...  يمرّر الطلبات إلى api.turath.io ويضيف ترويسات CORS ليعمل البحث من المتصفح.
 // 2) /ai/understand و /ai/arrange  يستدعيان Gemini (المفتاح في المتغيّر السري GEMINI_KEY).
-// متغيّر اختياري MODEL لاسم النموذج.
+// متغيّر اختياري MODEL لاسم النموذج الأول؛ وإن تعذّر انتقل تلقائيًا إلى البدائل.
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -15,22 +15,71 @@ const json = (obj, status = 200) =>
     headers: { ...CORS, 'Content-Type': 'application/json; charset=utf-8' },
   });
 
-async function gemini(env, system, user) {
-  const model = env.MODEL || 'gemini-2.5-flash-lite';
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${env.GEMINI_KEY}`;
-  const r = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      systemInstruction: { parts: [{ text: system }] },
-      contents: [{ role: 'user', parts: [{ text: user }] }],
-      generationConfig: { temperature: 0, responseMimeType: 'application/json', maxOutputTokens: 500 },
-    }),
-  });
-  if (!r.ok) throw new Error('gemini ' + r.status);
+const FALLBACK_MODELS = ['gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-flash-latest', 'gemini-flash-lite-latest'];
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+function modelsOf(env) {
+  const list = [];
+  for (const m of [env.MODEL, ...FALLBACK_MODELS]) {
+    const name = String(m || '').trim();
+    if (name && !list.includes(name)) list.push(name);
+  }
+  return list;
+}
+
+// محاولة واحدة لنموذج واحد
+async function callModel(env, model, system, user) {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+  let r;
+  try {
+    r = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': env.GEMINI_KEY },
+      signal: AbortSignal.timeout(25000),
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text: system }] },
+        contents: [{ role: 'user', parts: [{ text: user }] }],
+        generationConfig: { temperature: 0, responseMimeType: 'application/json', maxOutputTokens: 2048 },
+      }),
+    });
+  } catch (e) {
+    return { ok: false, status: 0, message: 'timeout' };
+  }
+  if (!r.ok) {
+    let message = '';
+    try { message = (await r.json())?.error?.message || ''; } catch (_) {}
+    return { ok: false, status: r.status, message: message.slice(0, 160) };
+  }
   const d = await r.json();
-  const text = d?.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
-  return JSON.parse(text);
+  const parts = d?.candidates?.[0]?.content?.parts || [];
+  const text = parts.filter((p) => !p.thought).map((p) => p.text || '').join('').trim();
+  try {
+    return { ok: true, data: JSON.parse(text.replace(/^```(?:json)?\s*|\s*```$/g, '')) };
+  } catch (_) {
+    return { ok: false, status: 200, message: 'bad json' };
+  }
+}
+
+async function gemini(env, system, user) {
+  const errors = [];
+  for (const model of modelsOf(env)) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const res = await callModel(env, model, system, user);
+      if (res.ok) return res.data;
+      errors.push(`${model}: ${res.status} ${res.message}`.trim());
+      // المفتاح مرفوض: لا فائدة من نموذج آخر
+      if (res.status === 401 || res.status === 403 || (res.status === 400 && /api key/i.test(res.message))) {
+        throw new Error(errors.join(' | '));
+      }
+      // مشغول أو مهلة: أعد المحاولة مرة بعد لحظة؛ وإلا انتقل للنموذج التالي
+      if (attempt === 0 && (res.status === 503 || res.status === 500 || res.status === 0)) {
+        await sleep(1200);
+        continue;
+      }
+      break;
+    }
+  }
+  throw new Error(errors.join(' | '));
 }
 
 const UNDERSTAND = `أنت مساعد بحث في كتب العلماء. يصلك سؤال شرعي بأي صياغة أو لهجة.
@@ -75,7 +124,7 @@ export default {
       }
       return json({ ok: true, name: 'sanad-proxy' });
     } catch (e) {
-      return json({ error: String(e).slice(0, 200) }, 502);
+      return json({ error: String(e).slice(0, 600) }, 502);
     }
   },
 };
