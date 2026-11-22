@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <!--
+    If you are serving your web app in a path other than the root, change the
+    href value below to reflect the base path you are serving from.
+
+    The path provided below has to start and end with a slash "/" in order for
+    it to work correctly.
+
+    For more details:
+    * https://developer.mozilla.org/en-US/docs/Web/HTML/Element/base
+
+    This is a placeholder for base href that will be replaced by the value of
+    the `--base-href` argument provided to `flutter build`.
+  -->
+  <base href="/sanad/">
+
+  <meta charset="UTF-8">
+  <meta content="IE=Edge" http-equiv="X-UA-Compatible">
+  <meta name="description" content="A new Flutter project.">
+
+  <!--
+    Uncomment the tag below to lay the app out underneath the parts of the
+    screen that the device obstructs, such as a display cutout, the rounded
+    corners of the screen, or a home indicator.
+
+    Without it, the browser keeps the app clear of them, and `SafeArea` and
+    `MediaQuery.paddingOf` report no padding. With it, the app covers the whole
+    screen, and it is up to the app to keep its own content out of the way,
+    which is what `SafeArea` is for.
+  -->
+  <!-- <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover"> -->
+
+  <!-- iOS meta tags & icons -->
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black">
+  <meta name="apple-mobile-web-app-title" content="sanad">
+  <link rel="apple-touch-icon" href="icons/Icon-192.png">
+
+  <!-- Favicon -->
+  <link rel="icon" type="image/png" href="favicon.png"/>
+
+  <title>سَنَد</title>
+  <link rel="manifest" href="manifest.json">
+<meta property="og:title" content="سَنَد"><meta property="og:description" content="كلام العلماء بنصّه ومصدره من كتبهم، دون فتوى من الذكاء الاصطناعي"><meta property="og:type" content="website"><meta name="theme-color" content="#0F5F57"></head>
+<body><div id="sanad-boot" style="position:fixed;top:0;left:0;right:0;bottom:0;display:flex;flex-direction:column;align-items:center;justify-content:center;background:#0B4A44;color:#fff;font-family:sans-serif;z-index:99999;text-align:center;padding:24px;direction:rtl">
+  <div style="font-size:46px;font-weight:bold">سَنَد</div>
+  <div id="sanad-msg" style="margin-top:14px;font-size:16px">جارٍ التحميل…</div>
+  <a id="sanad-apk" href="https://github.com/www774475437-svg/sanad/releases/latest/download/sanad.apk" style="display:none;margin-top:12px;color:#fff;font-size:15px;text-decoration:underline">أو حمّل تطبيق الأندرويد مباشرة</a>
+  <button id="sanad-btn" style="display:none;margin-top:18px;padding:12px 20px;border-radius:14px;border:0;font-size:16px">إعادة التحميل ومسح الذاكرة المؤقتة</button>
+</div>
+<script>
+(function () {
+  function remove() { var b = document.getElementById('sanad-boot'); if (b) b.remove(); }
+  function showBtn(msg) {
+    var m = document.getElementById('sanad-msg'); if (m) m.textContent = msg; m.style.cssText += ';white-space:pre-wrap;direction:ltr;font-size:12px;max-width:100%;word-break:break-all';
+    var b = document.getElementById('sanad-btn'); if (b) b.style.display = 'inline-block'; var a = document.getElementById('sanad-apk'); if (a) a.style.display = 'inline-block';
+  }
+  window.addEventListener('flutter-first-frame', remove);
+  var logs = [];
+  function note(x) { logs.push(String(x).slice(0, 160)); if (logs.length > 4) logs.shift(); }
+  ['error', 'warn'].forEach(function (k) {
+    var o = console[k];
+    console[k] = function () {
+      try { note(Array.prototype.slice.call(arguments).join(' ')); } catch (e) {}
+      return o.apply(console, arguments);
+    };
+  });
+  function detail() { return '\n' + logs.join('\n'); }
+  window.addEventListener('error', function (e) {
+    var t = (e && e.target && e.target.src) ? ' [' + e.target.src + ']' : '';
+    var m = (e && e.message ? e.message : '') + (e && e.filename ? ' @' + e.filename + ':' + e.lineno : '') + t;
+    showBtn('حدث خطأ أثناء التحميل: ' + m + detail());
+  });
+  window.addEventListener('unhandledrejection', function (e) {
+    showBtn('حدث خطأ أثناء التحميل: ' + (e && e.reason ? (e.reason.stack || e.reason) : '') + detail());
+  });
+  var t0 = Date.now();
+  var poll = setInterval(function () {
+    var up = document.querySelector('flutter-view, flt-glass-pane');
+    if (up && Date.now() - t0 > 6000) { remove(); clearInterval(poll); }
+  }, 500);
+  setTimeout(function () { if (document.getElementById('sanad-boot')) showBtn('يتأخر التحميل… جرّب إعادة التحميل'); }, 15000);
+  document.getElementById('sanad-btn').onclick = async function () {
+    try {
+      var rs = await navigator.serviceWorker.getRegistrations();
+      for (var i = 0; i < rs.length; i++) await rs[i].unregister();
+      var ks = await caches.keys();
+      for (var j = 0; j < ks.length; j++) await caches.delete(ks[j]);
+    } catch (e) {}
+    location.reload();
+  };
+})();
+</script>
+
+  <!--
+    You can customize the "flutter_bootstrap.js" script.
+    This is useful to provide a custom configuration to the Flutter loader
+    or to give the user feedback during the initialization process.
+
+    For more details:
+    * https://docs.flutter.dev/platform-integration/web/initialization
+  -->
+  <script src="flutter_bootstrap.js" async></script>
+</body>
+</html>
